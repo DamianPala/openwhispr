@@ -1682,7 +1682,10 @@ function performSyncTeardown() {
   if (audioTapManager) audioTapManager.stop().catch(() => {});
   if (linuxPortalAudioManager) linuxPortalAudioManager.stop().catch(() => {});
   if (meetingAecManager) meetingAecManager.stop().catch(() => {});
-  if (ipcHandlers) ipcHandlers._cleanupTextEditMonitor();
+  if (ipcHandlers) {
+    ipcHandlers.cleanupAllStreaming();
+    ipcHandlers._cleanupTextEditMonitor();
+  }
   if (textEditMonitor) textEditMonitor.stopMonitoring();
   if (updateManager) updateManager.cleanup();
 }
