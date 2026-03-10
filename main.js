@@ -1168,6 +1168,7 @@ if (gotSingleInstanceLock) {
       audioTapManager.stop().catch(() => {});
     }
     if (ipcHandlers) {
+      ipcHandlers.cleanupAllStreaming();
       ipcHandlers._cleanupTextEditMonitor();
     }
     if (textEditMonitor) {
