@@ -1829,7 +1829,7 @@
         "mistral_voxtral_mini_latest": "Transcripción multilingüe rápida",
         "corti_transcribe": "Transcripción médica de nivel clínico",
         "xai_grok_stt": "Reconocimiento de voz de alta precisión por xAI",
-        "soniox_stt_rt_v4": "Real-time streaming speech-to-text with high accuracy"
+        "soniox_stt_rt_v4": "Transcripción de voz en tiempo real con alta precisión"
       },
       "cloud": {
         "openai_gpt_5_2": "Modelo fuerte de razonamiento",

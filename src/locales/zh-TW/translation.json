@@ -1776,7 +1776,7 @@
         "mistral_voxtral_mini_latest": "快速多語言轉錄",
         "corti_transcribe": "臨床級醫療轉錄",
         "xai_grok_stt": "xAI 高精度語音辨識",
-        "soniox_stt_rt_v4": "Real-time streaming speech-to-text with high accuracy"
+        "soniox_stt_rt_v4": "高精度即時串流語音轉文字"
       },
       "cloud": {
         "openai_gpt_5_2": "強大的推理模型",

@@ -12,6 +12,7 @@ import bedrockIcon from "@/assets/icons/providers/bedrock.svg";
 import azureIcon from "@/assets/icons/providers/azure.svg";
 import vertexIcon from "@/assets/icons/providers/vertex.svg";
 import xaiIcon from "@/assets/icons/providers/xai.svg";
+import sonioxIcon from "@/assets/icons/providers/soniox.svg";
 
 export const PROVIDER_ICONS: Record<string, string> = {
   openai: openaiIcon,
@@ -29,9 +30,8 @@ export const PROVIDER_ICONS: Record<string, string> = {
   azure: azureIcon,
   vertex: vertexIcon,
   xai: xaiIcon,
+  soniox: sonioxIcon,
 };
-// Soniox has no icon asset yet; getProviderIcon returns
-// undefined, and ProviderIcon.tsx falls back to a Brain icon.
 
 export function getProviderIcon(provider: string): string | undefined {
   return PROVIDER_ICONS[provider];

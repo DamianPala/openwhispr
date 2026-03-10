@@ -1753,7 +1753,7 @@
         "mistral_voxtral_mini_latest": "Transcrição multilíngue rápida",
         "corti_transcribe": "Transcrição médica de nível clínico",
         "xai_grok_stt": "Reconhecimento de voz de alta precisão pela xAI",
-        "soniox_stt_rt_v4": "Real-time streaming speech-to-text with high accuracy"
+        "soniox_stt_rt_v4": "Transcrição de voz em tempo real com alta precisão"
       },
       "cloud": {
         "openai_gpt_5_2": "Modelo forte de raciocínio",
