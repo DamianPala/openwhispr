@@ -30,6 +30,8 @@ export const PROVIDER_ICONS: Record<string, string> = {
   vertex: vertexIcon,
   xai: xaiIcon,
 };
+// Soniox has no icon asset yet; getProviderIcon returns
+// undefined, and ProviderIcon.tsx falls back to a Brain icon.
 
 export function getProviderIcon(provider: string): string | undefined {
   return PROVIDER_ICONS[provider];

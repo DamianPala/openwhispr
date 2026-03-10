@@ -500,6 +500,7 @@ export interface SettingsState
   setMistralApiKey: (key: string) => void;
   setCortiClientId: (key: string) => void;
   setCortiClientSecret: (key: string) => void;
+  setSonioxApiKey: (key: string) => void;
   setCustomTranscriptionApiKey: (key: string) => void;
   setCleanupCustomApiKey: (key: string) => void;
 
@@ -689,6 +690,7 @@ const SECRET_IPC_SAVERS = {
   mistral: "saveMistralKey",
   cortiClientId: "saveCortiClientId",
   cortiClientSecret: "saveCortiClientSecret",
+  soniox: "saveSonioxKey",
   customTranscription: "saveCustomTranscriptionKey",
   cleanupCustom: "saveCleanupCustomKey",
   bedrockAccessKeyId: "saveBedrockAccessKeyId",
@@ -729,6 +731,7 @@ const STALE_SECRET_LOCALSTORAGE_KEYS = [
   "mistralApiKey",
   "cortiClientId",
   "cortiClientSecret",
+  "sonioxApiKey",
   "customTranscriptionApiKey",
   "customReasoningApiKey",
   "cleanupCustomApiKey",
@@ -809,6 +812,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   mistralApiKey: "",
   cortiClientId: "",
   cortiClientSecret: "",
+  sonioxApiKey: "",
   customTranscriptionApiKey: "",
   cleanupCustomApiKey: "",
 
@@ -1196,6 +1200,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   },
   setCortiEnvironment: createStringSetter("cortiEnvironment"),
   setCortiTenant: createStringSetter("cortiTenant"),
+  setSonioxApiKey: (key: string) => {
+    set({ sonioxApiKey: key });
+    debouncedSaveSecret("soniox", key);
+    invalidateApiKeyCaches();
+  },
   setCustomTranscriptionApiKey: (key: string) => {
     set({ customTranscriptionApiKey: key });
     debouncedSaveSecret("customTranscription", key);
@@ -1545,6 +1554,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     if (keys.mistralApiKey !== undefined) s.setMistralApiKey(keys.mistralApiKey);
     if (keys.cortiClientId !== undefined) s.setCortiClientId(keys.cortiClientId);
     if (keys.cortiClientSecret !== undefined) s.setCortiClientSecret(keys.cortiClientSecret);
+    if (keys.sonioxApiKey !== undefined) s.setSonioxApiKey(keys.sonioxApiKey);
     if (keys.customTranscriptionApiKey !== undefined)
       s.setCustomTranscriptionApiKey(keys.customTranscriptionApiKey);
     if (keys.cleanupCustomApiKey !== undefined) s.setCleanupCustomApiKey(keys.cleanupCustomApiKey);
@@ -1754,6 +1764,7 @@ export async function initializeSettings(): Promise<void> {
         mistral,
         cortiClientId,
         cortiClientSecret,
+        soniox,
         customTx,
         customRx,
         bedrockAccessKeyId,
@@ -1770,6 +1781,7 @@ export async function initializeSettings(): Promise<void> {
         window.electronAPI.getMistralKey?.(),
         window.electronAPI.getCortiClientId?.(),
         window.electronAPI.getCortiClientSecret?.(),
+        window.electronAPI.getSonioxKey?.(),
         window.electronAPI.getCustomTranscriptionKey?.(),
         window.electronAPI.getCleanupCustomKey?.(),
         window.electronAPI.getBedrockAccessKeyId?.(),
@@ -1788,6 +1800,7 @@ export async function initializeSettings(): Promise<void> {
         mistralApiKey: mistral || "",
         cortiClientId: cortiClientId || "",
         cortiClientSecret: cortiClientSecret || "",
+        sonioxApiKey: soniox || "",
         customTranscriptionApiKey: customTx || "",
         cleanupCustomApiKey: customRx || "",
         bedrockAccessKeyId: bedrockAccessKeyId || "",

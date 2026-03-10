@@ -14,6 +14,7 @@ const DeepgramStreaming = require("./deepgramStreaming");
 const CortiStreaming = require("./cortiStreaming");
 const OpenAIRealtimeStreaming = require("./openaiRealtimeStreaming");
 const { getCortiToken } = require("./cortiAuth");
+const SonioxStreaming = require("./sonioxStreaming");
 const AudioStorageManager = require("./audioStorage");
 const liveSpeakerIdentifier = require("./liveSpeakerIdentifier");
 const MeetingEchoLeakDetector = require("./meetingEchoLeakDetector");
@@ -335,6 +336,7 @@ class IPCHandlers {
     this._meetingMicStreaming = null;
     this._meetingSystemStreaming = null;
     this._hotkeyCaptureMode = false;
+    this._sonioxStreaming = null;
     this._autoLearnEnabled = true; // Default on, synced from renderer
     this._autoLearnDebounceTimer = null;
     this._autoLearnLatestData = null;
@@ -2652,6 +2654,14 @@ class IPCHandlers {
 
     ipcMain.handle("save-mistral-key", async (event, key) => {
       return this.environmentManager.saveMistralKey(key);
+    });
+
+    ipcMain.handle("get-soniox-key", async () => {
+      return this.environmentManager.getSonioxKey();
+    });
+
+    ipcMain.handle("save-soniox-key", async (event, key) => {
+      return this.environmentManager.saveSonioxKey(key);
     });
 
     ipcMain.handle(
@@ -5847,6 +5857,90 @@ class IPCHandlers {
       }
       this.windowManager.holdTranscriptionPreview(options);
       return { success: true };
+    });
+
+    // --- Soniox streaming ---
+    ipcMain.handle("soniox-streaming-warmup", async (event, options = {}) => {
+      try {
+        const apiKey = options.apiKey || this.environmentManager.getSonioxKey();
+        if (!apiKey) {
+          return { success: false, error: "Soniox API key not configured", code: "NO_API" };
+        }
+
+        if (this._sonioxStreaming?.isConnected) {
+          await this._sonioxStreaming.disconnect();
+        }
+        this._sonioxStreaming = new SonioxStreaming();
+        this._sonioxStreaming.onPartialTranscript = (text) =>
+          event.sender.send("soniox-streaming-partial", text);
+        this._sonioxStreaming.onFinalTranscript = (text) =>
+          event.sender.send("soniox-streaming-final", text);
+        this._sonioxStreaming.onError = (err) =>
+          event.sender.send("soniox-streaming-error", err.message);
+        this._sonioxStreaming.onSessionEnd = (data) =>
+          event.sender.send("soniox-streaming-session-end", data || {});
+
+        await this._sonioxStreaming.connect({
+          apiKey,
+          model: options.model || "stt-rt-v4",
+          language: options.language,
+        });
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    });
+
+    ipcMain.handle("soniox-streaming-start", async (event, options = {}) => {
+      try {
+        if (!this._sonioxStreaming?.isConnected) {
+          const apiKey = options.apiKey || this.environmentManager.getSonioxKey();
+          if (!apiKey) {
+            return { success: false, error: "Soniox API key not configured", code: "NO_API" };
+          }
+
+          // Cold start: create new connection
+          this._sonioxStreaming = new SonioxStreaming();
+          this._sonioxStreaming.onPartialTranscript = (text) =>
+            event.sender.send("soniox-streaming-partial", text);
+          this._sonioxStreaming.onFinalTranscript = (text) =>
+            event.sender.send("soniox-streaming-final", text);
+          this._sonioxStreaming.onError = (err) =>
+            event.sender.send("soniox-streaming-error", err.message);
+          this._sonioxStreaming.onSessionEnd = (data) =>
+            event.sender.send("soniox-streaming-session-end", data || {});
+
+          await this._sonioxStreaming.connect({
+            apiKey,
+            model: options.model || "stt-rt-v4",
+            language: options.language,
+          });
+        }
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    });
+
+    ipcMain.on("soniox-streaming-send", (_event, audioBuffer) => {
+      this._sonioxStreaming?.sendAudio(Buffer.from(audioBuffer));
+    });
+
+    ipcMain.on("soniox-streaming-finalize", () => {
+      this._sonioxStreaming?.finalize();
+    });
+
+    ipcMain.handle("soniox-streaming-stop", async () => {
+      if (!this._sonioxStreaming) {
+        return { success: true, text: "" };
+      }
+      const result = await this._sonioxStreaming.disconnect().catch(() => ({ text: "" }));
+      this._sonioxStreaming = null;
+      return { success: true, text: result.text || "" };
+    });
+
+    ipcMain.handle("soniox-streaming-status", async () => {
+      return { connected: !!this._sonioxStreaming?.isConnected };
     });
 
     ipcMain.handle("update-transcription-text", async (_event, id, text, rawText) => {

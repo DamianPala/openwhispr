@@ -62,6 +62,7 @@ export interface ApiKeySettings {
   mistralApiKey: string;
   cortiClientId: string;
   cortiClientSecret: string;
+  sonioxApiKey: string;
   customTranscriptionApiKey: string;
   cleanupCustomApiKey: string;
 }
@@ -263,6 +264,8 @@ function useSettingsInternal() {
     setGeminiApiKey: store.setGeminiApiKey,
     setGroqApiKey: store.setGroqApiKey,
     setMistralApiKey: store.setMistralApiKey,
+    sonioxApiKey: store.sonioxApiKey,
+    setSonioxApiKey: store.setSonioxApiKey,
     customTranscriptionApiKey: store.customTranscriptionApiKey,
     setCustomTranscriptionApiKey: store.setCustomTranscriptionApiKey,
     cleanupCustomApiKey: store.cleanupCustomApiKey,

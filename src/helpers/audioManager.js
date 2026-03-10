@@ -131,6 +131,18 @@ const STREAMING_PROVIDERS = {
     onError: (cb) => window.electronAPI.onCortiError(cb),
     onSessionEnd: (cb) => window.electronAPI.onCortiSessionEnd(cb),
   },
+  soniox: {
+    warmup: (opts) => window.electronAPI.sonioxStreamingWarmup(opts),
+    start: (opts) => window.electronAPI.sonioxStreamingStart(opts),
+    send: (buf) => window.electronAPI.sonioxStreamingSend(buf),
+    finalize: () => window.electronAPI.sonioxStreamingFinalize(),
+    stop: () => window.electronAPI.sonioxStreamingStop(),
+    status: () => window.electronAPI.sonioxStreamingStatus(),
+    onPartial: (cb) => window.electronAPI.onSonioxPartialTranscript(cb),
+    onFinal: (cb) => window.electronAPI.onSonioxFinalTranscript(cb),
+    onError: (cb) => window.electronAPI.onSonioxError(cb),
+    onSessionEnd: (cb) => window.electronAPI.onSonioxSessionEnd(cb),
+  },
 };
 
 class AudioManager {
@@ -282,6 +294,9 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
   getStreamingProviderName() {
     const s = getSettings();
+    if (s.cloudTranscriptionProvider === "soniox" && s.cloudTranscriptionMode === "byok") {
+      return "soniox";
+    }
     if (s.cloudTranscriptionProvider === "corti" && s.cloudTranscriptionMode === "byok") {
       return "corti";
     }
@@ -2292,6 +2307,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     // batch mode even for realtime-capable models (e.g. gpt-4o-mini-transcribe).
     if (this.context !== "notes" && this.sttConfig?.dictation?.mode === "batch") {
       return false;
+    }
+
+    // Soniox is always streaming (BYOK only)
+    if (s.cloudTranscriptionProvider === "soniox" && s.sonioxApiKey) {
+      return true;
     }
 
     if (REALTIME_MODELS.has(s.cloudTranscriptionModel)) {

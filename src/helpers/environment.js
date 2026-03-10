@@ -17,6 +17,7 @@ const SECRET_KEYS = [
   "DEEPGRAM_API_KEY",
   "CORTI_CLIENT_ID",
   "CORTI_CLIENT_SECRET",
+  "SONIOX_API_KEY",
   "CUSTOM_TRANSCRIPTION_API_KEY",
   "CUSTOM_CLEANUP_API_KEY",
   "BEDROCK_ACCESS_KEY_ID",
@@ -342,6 +343,14 @@ class EnvironmentManager {
 
   saveCortiClientSecret(key) {
     return this._saveKey("CORTI_CLIENT_SECRET", key);
+  }
+
+  getSonioxKey() {
+    return this._getKey("SONIOX_API_KEY");
+  }
+
+  saveSonioxKey(key) {
+    return this._saveKey("SONIOX_API_KEY", key);
   }
 
   getCustomTranscriptionKey() {
