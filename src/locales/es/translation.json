@@ -165,7 +165,9 @@
     "unknownError": "Ocurrió un error desconocido",
     "copy": "Copiar",
     "copied": "Copiado",
-    "done": "Listo"
+    "done": "Listo",
+    "none": "Ninguno",
+    "secondaryLanguage": "Idioma secundario"
   },
   "onboarding": {
     "steps": {

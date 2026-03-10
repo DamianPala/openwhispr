@@ -165,7 +165,9 @@
     "unknownError": "Une erreur inconnue s'est produite",
     "copy": "Copier",
     "copied": "Copié",
-    "done": "Terminé"
+    "done": "Terminé",
+    "none": "Aucun",
+    "secondaryLanguage": "Langue secondaire"
   },
   "onboarding": {
     "steps": {

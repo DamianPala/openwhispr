@@ -165,7 +165,9 @@
     "unknownError": "An unknown error occurred",
     "copy": "Copy",
     "copied": "Copied",
-    "done": "Done"
+    "done": "Done",
+    "none": "None",
+    "secondaryLanguage": "Secondary language"
   },
   "onboarding": {
     "steps": {

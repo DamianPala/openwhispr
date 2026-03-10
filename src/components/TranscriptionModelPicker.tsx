@@ -9,6 +9,8 @@ import { ProviderTabs } from "./ui/ProviderTabs";
 import ModelCardList from "./ui/ModelCardList";
 import { DownloadProgressBar } from "./ui/DownloadProgressBar";
 import ApiKeyInput from "./ui/ApiKeyInput";
+import LanguageSelector, { type LanguageOption } from "./ui/LanguageSelector";
+import languageRegistry from "../config/languageRegistry.json";
 import { ConfirmDialog } from "./ui/dialog";
 import { useDialogs } from "../hooks/useDialogs";
 import { useModelDownload, type DownloadProgress } from "../hooks/useModelDownload";
@@ -199,6 +201,10 @@ interface TranscriptionModelPickerProps {
   streamingOnly?: boolean;
 }
 
+const SECONDARY_LANGUAGE_OPTIONS: LanguageOption[] = languageRegistry.languages
+  .filter((l) => l.code !== "auto")
+  .map(({ code, label, flag }) => ({ value: code, label, flag }));
+
 const CLOUD_PROVIDER_TABS = [
   { id: "openai", name: "OpenAI" },
   { id: "groq", name: "Groq" },
@@ -354,8 +360,12 @@ export default function TranscriptionModelPicker({
   const setCortiTenant = useSettingsStore((s) => s.setCortiTenant);
   const sonioxApiKey = useSettingsStore((s) => s.sonioxApiKey);
   const setSonioxApiKey = useSettingsStore((s) => s.setSonioxApiKey);
+  const sonioxSecondaryLanguage = useSettingsStore((s) => s.sonioxSecondaryLanguage);
+  const setSonioxSecondaryLanguage = useSettingsStore((s) => s.setSonioxSecondaryLanguage);
   const customTranscriptionApiKey = useSettingsStore((s) => s.customTranscriptionApiKey);
   const setCustomTranscriptionApiKey = useSettingsStore((s) => s.setCustomTranscriptionApiKey);
+  const preferredLanguage = useSettingsStore((s) => s.preferredLanguage);
+  const isAutoLanguage = !preferredLanguage || preferredLanguage === "auto";
   const effectiveLocal = mode === "local" ? true : mode === "cloud" ? false : useLocalWhisper;
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [parakeetModels, setParakeetModels] = useState<LocalModel[]>([]);
@@ -1014,6 +1024,23 @@ export default function TranscriptionModelPicker({
                     )}
                   </div>
                 ))}
+
+                {selectedCloudProvider === "soniox" && setSonioxSecondaryLanguage && (
+                  <div className={`flex items-center justify-between gap-3 ${isAutoLanguage ? "opacity-50 pointer-events-none" : ""}`}>
+                    <label className="text-xs font-medium text-foreground whitespace-nowrap">
+                      {t("common.secondaryLanguage")}
+                    </label>
+                    <LanguageSelector
+                      value={isAutoLanguage ? "none" : (sonioxSecondaryLanguage || "none")}
+                      onChange={(value) => setSonioxSecondaryLanguage(value === "none" ? "" : value)}
+                      options={[
+                        { value: "none", label: t("common.none"), flag: "" },
+                        ...SECONDARY_LANGUAGE_OPTIONS,
+                      ]}
+                      className="min-w-32"
+                    />
+                  </div>
+                )}
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-foreground">{t("common.model")}</label>

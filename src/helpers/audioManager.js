@@ -2581,6 +2581,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       const result = await withSessionRefresh(async () => {
         const {
           preferredLanguage: preferredLang,
+          sonioxSecondaryLanguage,
           cloudTranscriptionModel,
           cloudTranscriptionMode,
           cortiEnvironment,
@@ -2590,6 +2591,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         const res = await provider.start({
           sampleRate: 16000,
           language: preferredLang && preferredLang !== "auto" ? preferredLang : undefined,
+          secondaryLanguage: preferredLang && preferredLang !== "auto" ? (sonioxSecondaryLanguage || undefined) : undefined,
           keyterms: this.getKeyterms(),
           model: cloudTranscriptionModel,
           mode: cloudTranscriptionMode === "byok" ? "byok" : "openwhispr",

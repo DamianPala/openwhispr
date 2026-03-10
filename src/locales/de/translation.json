@@ -165,7 +165,9 @@
     "unknownError": "Ein unbekannter Fehler ist aufgetreten",
     "copy": "Kopieren",
     "copied": "Kopiert",
-    "done": "Fertig"
+    "done": "Fertig",
+    "none": "Keine",
+    "secondaryLanguage": "Zweitsprache"
   },
   "onboarding": {
     "steps": {
