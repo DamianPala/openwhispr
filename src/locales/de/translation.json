@@ -143,7 +143,9 @@
     "private": "Privat",
     "tap": "Tippen",
     "close": "Schließen",
-    "dismiss": "Verwerfen"
+    "dismiss": "Verwerfen",
+    "none": "Keine",
+    "secondaryLanguage": "Zweitsprache"
   },
   "onboarding": {
     "steps": {
