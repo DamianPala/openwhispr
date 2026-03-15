@@ -183,6 +183,8 @@ interface TranscriptionSectionProps {
   setSonioxApiKey: (key: string) => void;
   sonioxSecondaryLanguage: string;
   setSonioxSecondaryLanguage: (lang: string) => void;
+  sonioxKeepAliveTimeout: number;
+  setSonioxKeepAliveTimeout: (val: number) => void;
   customTranscriptionApiKey: string;
   setCustomTranscriptionApiKey: (key: string) => void;
   cloudTranscriptionBaseUrl?: string;
@@ -222,6 +224,8 @@ function TranscriptionSection({
   setSonioxApiKey,
   sonioxSecondaryLanguage,
   setSonioxSecondaryLanguage,
+  sonioxKeepAliveTimeout,
+  setSonioxKeepAliveTimeout,
   customTranscriptionApiKey,
   setCustomTranscriptionApiKey,
   cloudTranscriptionBaseUrl,
@@ -402,6 +406,8 @@ function TranscriptionSection({
           setSonioxApiKey={setSonioxApiKey}
           sonioxSecondaryLanguage={sonioxSecondaryLanguage}
           setSonioxSecondaryLanguage={setSonioxSecondaryLanguage}
+          sonioxKeepAliveTimeout={sonioxKeepAliveTimeout}
+          setSonioxKeepAliveTimeout={setSonioxKeepAliveTimeout}
           customTranscriptionApiKey={customTranscriptionApiKey}
           setCustomTranscriptionApiKey={setCustomTranscriptionApiKey}
           cloudTranscriptionBaseUrl={cloudTranscriptionBaseUrl}
@@ -766,6 +772,8 @@ export default function SettingsPage({ activeSection = "general" }: SettingsPage
     setSonioxApiKey,
     sonioxSecondaryLanguage,
     setSonioxSecondaryLanguage,
+    sonioxKeepAliveTimeout,
+    setSonioxKeepAliveTimeout,
     customTranscriptionApiKey,
     setCustomTranscriptionApiKey,
     customReasoningApiKey,
@@ -3059,6 +3067,8 @@ EOF`,
             setSonioxApiKey={setSonioxApiKey}
             sonioxSecondaryLanguage={sonioxSecondaryLanguage}
             setSonioxSecondaryLanguage={setSonioxSecondaryLanguage}
+            sonioxKeepAliveTimeout={sonioxKeepAliveTimeout}
+            setSonioxKeepAliveTimeout={setSonioxKeepAliveTimeout}
             customTranscriptionApiKey={customTranscriptionApiKey}
             setCustomTranscriptionApiKey={setCustomTranscriptionApiKey}
             cloudTranscriptionBaseUrl={cloudTranscriptionBaseUrl}
