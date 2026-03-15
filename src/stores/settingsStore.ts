@@ -476,6 +476,7 @@ export interface SettingsState
   setFallbackWhisperModel: (value: string) => void;
   setPreferredLanguage: (value: string) => void;
   setSonioxSecondaryLanguage: (value: string) => void;
+  setSonioxKeepAliveTimeout: (value: number) => void;
   setCloudTranscriptionProvider: (value: string) => void;
   setCloudTranscriptionModel: (value: string) => void;
   setCloudTranscriptionBaseUrl: (value: string) => void;
@@ -775,6 +776,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   fallbackWhisperModel: readString("fallbackWhisperModel", "base"),
   preferredLanguage: readString("preferredLanguage", "auto"),
   sonioxSecondaryLanguage: readString("sonioxSecondaryLanguage", ""),
+  sonioxKeepAliveTimeout: parseInt(readString("sonioxKeepAliveTimeout", "0"), 10) || 0,
   cloudTranscriptionProvider: readString("cloudTranscriptionProvider", "openai"),
   cloudTranscriptionModel: readString("cloudTranscriptionModel", "gpt-4o-mini-transcribe"),
   cloudTranscriptionBaseUrl: readString(
@@ -1102,6 +1104,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setFallbackWhisperModel: createStringSetter("fallbackWhisperModel"),
   setPreferredLanguage: createStringSetter("preferredLanguage"),
   setSonioxSecondaryLanguage: createStringSetter("sonioxSecondaryLanguage"),
+  setSonioxKeepAliveTimeout: (val: number) => {
+    if (isBrowser) localStorage.setItem("sonioxKeepAliveTimeout", String(val));
+    set({ sonioxKeepAliveTimeout: val });
+  },
   setCloudTranscriptionProvider: createStringSetter("cloudTranscriptionProvider"),
   setCloudTranscriptionModel: createStringSetter("cloudTranscriptionModel"),
   setCloudTranscriptionBaseUrl: createStringSetter("cloudTranscriptionBaseUrl"),

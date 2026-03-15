@@ -167,7 +167,15 @@
     "copied": "Copied",
     "done": "Done",
     "none": "None",
+    "off": "Off",
     "secondaryLanguage": "Secondary language"
+  },
+  "transcriptionModelPicker": {
+    "keepAlive": {
+      "label": "Stay connected for",
+      "cost": "cost",
+      "description": "After each recording, stays connected so the next one starts instantly. Soniox charges for idle connection time."
+    }
   },
   "onboarding": {
     "steps": {

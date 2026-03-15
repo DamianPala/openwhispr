@@ -167,7 +167,15 @@
     "copied": "Kopiert",
     "done": "Fertig",
     "none": "Нет",
+    "off": "Выкл.",
     "secondaryLanguage": "Второй язык"
+  },
+  "transcriptionModelPicker": {
+    "keepAlive": {
+      "label": "Оставаться на связи",
+      "cost": "стоимость",
+      "description": "После каждой записи сохраняет соединение, чтобы следующая запись начиналась мгновенно. Soniox взимает плату за время простоя соединения."
+    }
   },
   "onboarding": {
     "steps": {

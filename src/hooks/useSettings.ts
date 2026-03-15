@@ -16,6 +16,7 @@ export interface TranscriptionSettings {
   fallbackWhisperModel: string;
   preferredLanguage: string;
   sonioxSecondaryLanguage: string;
+  sonioxKeepAliveTimeout: number;
   cloudTranscriptionProvider: string;
   cloudTranscriptionModel: string;
   cloudTranscriptionBaseUrl?: string;
@@ -203,6 +204,8 @@ function useSettingsInternal() {
     preferredLanguage: store.preferredLanguage,
     sonioxSecondaryLanguage: store.sonioxSecondaryLanguage,
     setSonioxSecondaryLanguage: store.setSonioxSecondaryLanguage,
+    sonioxKeepAliveTimeout: store.sonioxKeepAliveTimeout,
+    setSonioxKeepAliveTimeout: store.setSonioxKeepAliveTimeout,
     cloudTranscriptionProvider: store.cloudTranscriptionProvider,
     cloudTranscriptionModel: store.cloudTranscriptionModel,
     cloudTranscriptionBaseUrl: store.cloudTranscriptionBaseUrl,

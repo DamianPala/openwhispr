@@ -2373,19 +2373,24 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         withSessionRefresh(async () => {
           const {
             preferredLanguage: warmupLang,
+            sonioxSecondaryLanguage,
             cloudTranscriptionModel,
             cloudTranscriptionMode,
             cortiEnvironment,
             cortiTenant,
+            sonioxKeepAliveTimeout,
           } = getSettings();
+          const isExplicitLang = warmupLang && warmupLang !== "auto";
           const res = await provider.warmup({
             sampleRate: 16000,
-            language: warmupLang && warmupLang !== "auto" ? warmupLang : undefined,
+            language: isExplicitLang ? warmupLang : undefined,
+            secondaryLanguage: isExplicitLang ? (sonioxSecondaryLanguage || undefined) : undefined,
             keyterms: this.getKeyterms(),
             model: cloudTranscriptionModel,
             mode: cloudTranscriptionMode === "byok" ? "byok" : "openwhispr",
             environment: cortiEnvironment,
             tenant: cortiTenant,
+            keepAliveTimeout: sonioxKeepAliveTimeout || 0,
           });
           // Throw error to trigger retry if AUTH_EXPIRED
           if (!res.success && res.code) {

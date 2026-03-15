@@ -167,7 +167,15 @@
     "copied": "Kopiert",
     "done": "Fertig",
     "none": "Keine",
+    "off": "Aus",
     "secondaryLanguage": "Zweitsprache"
+  },
+  "transcriptionModelPicker": {
+    "keepAlive": {
+      "label": "Verbunden bleiben für",
+      "cost": "Kosten",
+      "description": "Bleibt nach jeder Aufnahme verbunden, damit die nächste sofort startet. Soniox berechnet die Leerlauf-Verbindungszeit."
+    }
   },
   "onboarding": {
     "steps": {

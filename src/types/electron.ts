@@ -1766,7 +1766,9 @@ declare global {
         apiKey?: string;
         model?: string;
         language?: string;
-      }) => Promise<{ success: boolean; error?: string }>;
+        secondaryLanguage?: string;
+        keepAliveTimeout?: number;
+      }) => Promise<{ success: boolean; error?: string; alreadyWarm?: boolean }>;
       sonioxStreamingStart?: (options?: {
         apiKey?: string;
         model?: string;
