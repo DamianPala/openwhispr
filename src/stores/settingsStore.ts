@@ -145,6 +145,7 @@ const ARRAY_SETTINGS = new Set(["customDictionary", "snippets", "gcalAccounts"])
 
 const NUMERIC_SETTINGS = new Set([
   "audioRetentionDays",
+  "sonioxKeepAliveTimeout",
   "whisperVadThreshold",
   "whisperVadMinSpeechDurationMs",
   "whisperVadMinSilenceDurationMs",
