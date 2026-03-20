@@ -5918,6 +5918,7 @@ class IPCHandlers {
             model: options.model || "stt-rt-v4",
             language: options.language,
             secondaryLanguage: options.secondaryLanguage,
+            customDictionary: options.keyterms,
             idleTimeoutMs: timeoutSeconds * 1000,
           });
         }
@@ -5956,6 +5957,7 @@ class IPCHandlers {
             model: options.model || "stt-rt-v4",
             language: options.language,
             secondaryLanguage: options.secondaryLanguage,
+            customDictionary: options.keyterms,
           });
         }
         return { success: true, usedWarmConnection: hadWarm };
