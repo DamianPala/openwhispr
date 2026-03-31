@@ -167,9 +167,9 @@ class KDEShortcutManager {
 
       iface.on("globalShortcutPressed", (componentUnique, shortcutUnique, timestamp) => {
         debugLogger.log("[KDEShortcut] Shortcut pressed", { componentUnique, shortcutUnique });
-        // Tested on KDE Plasma 6 (Fedora 43): signal sends the actionFriendly
-        // name ("OpenWhispr") not the actionUnique ("dictation"). The fallback
-        // maps friendly names back to slot names.
+        // KGlobalAccel signal sends the actionUnique value as shortcutUnique.
+        // Direct callback lookup by slotName should match. Fallback maps
+        // actionFriendly names for compatibility.
         const callback =
           this.callbacks.get(shortcutUnique) || this._findCallbackByFriendlyName(shortcutUnique);
         if (callback) {
@@ -216,8 +216,8 @@ class KDEShortcutManager {
       return false;
     }
 
-    // actionId: [componentUnique, componentFriendly, actionUnique, actionFriendly]
-    const actionId = [COMPONENT_NAME, "OpenWhispr", slotName, `OpenWhispr ${slotName}`];
+    // actionId: [componentUnique, actionUnique, componentFriendly, actionFriendly]
+    const actionId = [COMPONENT_NAME, slotName, "OpenWhispr", `OpenWhispr ${slotName}`];
 
     try {
       // Flag 0: always overwrite. 0x02 keeps stale saved values that
@@ -253,7 +253,7 @@ class KDEShortcutManager {
   async unregisterKeybinding(slotName = "dictation") {
     if (!this.kglobalaccel) return;
 
-    const actionId = [COMPONENT_NAME, "OpenWhispr", slotName, `OpenWhispr ${slotName}`];
+    const actionId = [COMPONENT_NAME, slotName, "OpenWhispr", `OpenWhispr ${slotName}`];
 
     try {
       await this.kglobalaccel.unRegister(actionId);
@@ -271,7 +271,7 @@ class KDEShortcutManager {
     // clean up stale registrations from dead processes anyway.
     const promises = [];
     for (const slotName of this.registeredSlots) {
-      const actionId = [COMPONENT_NAME, "OpenWhispr", slotName, `OpenWhispr ${slotName}`];
+      const actionId = [COMPONENT_NAME, slotName, "OpenWhispr", `OpenWhispr ${slotName}`];
       try {
         promises.push(this.kglobalaccel?.unRegister(actionId));
       } catch {}
