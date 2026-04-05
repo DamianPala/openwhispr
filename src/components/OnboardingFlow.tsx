@@ -157,6 +157,17 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     checkHotkeyMode();
   }, [setActivationMode]);
 
+  // Update wizard state when backend falls back to a different hotkey
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.onHotkeyFallbackUsed?.((data: { fallback: string }) => {
+      if (data?.fallback) {
+        setHotkey(data.fallback);
+        setDictationKey(data.fallback);
+      }
+    });
+    return () => unsubscribe?.();
+  }, [setDictationKey]);
+
   useEffect(() => {
     const modelToCheck = localTranscriptionProvider === "nvidia" ? parakeetModel : whisperModel;
     if (!useLocalWhisper || !modelToCheck) {
@@ -201,6 +212,14 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
       hotkeyStepInitializedRef.current = true;
 
       try {
+        // Check if backend already registered a hotkey (e.g., KDE D-Bus fallback)
+        const backendKey = localStorage.getItem("dictationKey");
+        if (backendKey && backendKey.trim() !== "") {
+          setHotkey(backendKey);
+          setDictationKey(backendKey);
+          return;
+        }
+
         // Get platform-appropriate default hotkey
         const defaultHotkey = getDefaultHotkey();
         const platform = window.electronAPI?.getPlatform?.() ?? "darwin";

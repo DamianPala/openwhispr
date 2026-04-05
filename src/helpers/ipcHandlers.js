@@ -1653,9 +1653,19 @@ class IPCHandlers {
             debugLogger.warn("[IPC] Failed to unregister Hyprland keybinding:", err.message);
           });
         }
+
+        // On KDE (X11 or Wayland), unregister the keybinding during capture
+        if (hotkeyManager.isUsingKDE() && hotkeyManager.kdeManager) {
+          debugLogger.log("[IPC] Unregistering KDE keybinding for hotkey capture mode");
+          await hotkeyManager.kdeManager.unregisterKeybinding().catch((err) => {
+            debugLogger.warn("[IPC] Failed to unregister KDE keybinding:", err.message);
+          });
+        }
       } else {
         // Exiting capture mode - re-register globalShortcut if not already registered
-        if (effectiveHotkey && !usesNativeListener(effectiveHotkey)) {
+        // Skip for KDE/GNOME/Hyprland — updateHotkey handles re-registration via native path
+        const usesNativePath = hotkeyManager.isUsingKDE() || hotkeyManager.isUsingGnome() || hotkeyManager.isUsingHyprland();
+        if (effectiveHotkey && !usesNativeListener(effectiveHotkey) && !usesNativePath) {
           const { globalShortcut } = require("electron");
           const accelerator = effectiveHotkey.startsWith("Fn+")
             ? effectiveHotkey.slice(3)
@@ -1712,6 +1722,18 @@ class IPCHandlers {
           );
           const success = await hotkeyManager.hyprlandManager.registerKeybinding(effectiveHotkey);
           if (success) {
+            hotkeyManager.currentHotkey = effectiveHotkey;
+          }
+        }
+
+        // On KDE (X11 or Wayland), re-register the keybinding with the effective hotkey
+        if (hotkeyManager.isUsingKDE() && hotkeyManager.kdeManager && effectiveHotkey) {
+          debugLogger.log(
+            `[IPC] Re-registering KDE keybinding "${effectiveHotkey}" after capture mode`
+          );
+          const callback = this.windowManager.createHotkeyCallback();
+          const result = await hotkeyManager.kdeManager.registerKeybinding(effectiveHotkey, "dictation", callback);
+          if (result === true) {
             hotkeyManager.currentHotkey = effectiveHotkey;
           }
         }

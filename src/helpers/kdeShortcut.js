@@ -216,14 +216,77 @@ class KDEShortcutManager {
       return false;
     }
 
+    // Modifier-only shortcuts (e.g. Control+Super) don't work on X11 —
+    // XGrabKey requires an actual key code, not just modifiers.
+    // On Wayland, KWin handles modifier-only natively, so allow them.
+    const QT_MODIFIER_MASK = 0xFE000000;
+    if (!KDEShortcutManager.isWayland() && (qtKey & ~QT_MODIFIER_MASK) === 0) {
+      debugLogger.log("[KDEShortcut] Modifier-only shortcut not supported on X11", {
+        slot: slotName,
+        hotkey: electronHotkey,
+        qtKey: `0x${qtKey.toString(16)}`,
+      });
+      return "modifier-only";
+    }
+
     // actionId: [componentUnique, actionUnique, componentFriendly, actionFriendly]
     const actionId = [COMPONENT_NAME, slotName, "OpenWhispr", `OpenWhispr ${slotName}`];
 
     try {
-      // Flag 0: always overwrite. 0x02 keeps stale saved values that
-      // silently prevent the hotkey from firing on startup.
+      // Pre-registration conflict check: query if another component already owns this key.
+      // We use a low-level D-Bus call because dbus-next proxy can't marshal the 'ai'
+      // signature correctly (it receives a number instead of an array).
+      try {
+        const dbusModule = getDBus();
+        const msg = new dbusModule.Message({
+          destination: "org.kde.kglobalaccel",
+          path: "/kglobalaccel",
+          interface: "org.kde.KGlobalAccel",
+          member: "globalShortcutsByKey",
+          signature: "aii",
+          body: [[qtKey], 0],
+        });
+        const reply = await this.bus.call(msg);
+        const owners = reply.body?.[0];
+        if (Array.isArray(owners) && owners.length > 0) {
+          const otherOwners = owners.filter(
+            (aid) => Array.isArray(aid) && aid[0] !== COMPONENT_NAME
+          );
+          if (otherOwners.length > 0) {
+            debugLogger.log("[KDEShortcut] Shortcut conflict — key owned by another component", {
+              slot: slotName,
+              hotkey: electronHotkey,
+              owners: otherOwners.map((a) => a[0]),
+            });
+            return "conflict";
+          }
+        }
+      } catch (checkErr) {
+        // globalShortcutsByKey may not exist on older KDE — proceed without check
+        debugLogger.log("[KDEShortcut] Could not check for conflicts, proceeding:", checkErr.message);
+      }
+
+      // Clear any stale registration first, then register with flag 0x02.
+      // Flag 0x02 (SetPresent) is required for globalShortcutPressed signal delivery.
+      // Flag 0 breaks signal delivery (shortcut registers but never fires).
+      // Stale values are handled by the explicit unRegister before doRegister.
+      try { await this.kglobalaccel.unRegister(actionId); } catch {}
       await this.kglobalaccel.doRegister(actionId);
-      const result = await this.kglobalaccel.setShortcut(actionId, [qtKey], 0);
+      const result = await this.kglobalaccel.setShortcut(actionId, [qtKey], 0x02);
+
+      // Post-registration conflict check: setShortcut returns the actual key
+      // sequence assigned. If it differs from what we requested (e.g. returns [0]
+      // or empty), the key is owned by another component.
+      const assignedKey = Array.isArray(result) && result.length > 0 ? result[0] : null;
+      if (assignedKey !== null && assignedKey !== qtKey) {
+        debugLogger.log("[KDEShortcut] Shortcut conflict — setShortcut assigned different key", {
+          slot: slotName,
+          requested: `0x${qtKey.toString(16)}`,
+          assigned: `0x${assignedKey.toString(16)}`,
+        });
+        try { await this.kglobalaccel.unRegister(actionId); } catch {}
+        return "conflict";
+      }
 
       if (callback) this.callbacks.set(slotName, callback);
       this.registeredSlots.add(slotName);
@@ -241,7 +304,6 @@ class KDEShortcutManager {
         slot: slotName,
         hotkey: electronHotkey,
         qtKey: `0x${qtKey.toString(16)}`,
-        result,
       });
       return true;
     } catch (err) {
