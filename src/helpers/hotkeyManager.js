@@ -14,6 +14,10 @@ const FALLBACK_HOTKEYS = ["F8", "F9", "Control+Shift+Space"];
 // Default hotkey for dictation if no saved value exists
 const DEFAULT_HOTKEY = "Control+Super";
 
+// Slots routed through GNOME native gsettings (not globalShortcut).
+// Temporary slots like "cancel" stay on globalShortcut.
+const GNOME_NATIVE_SLOTS = new Set(["agent", "meeting"]);
+
 // KDE registration failure reasons — reuse existing i18n keys
 const KDE_FAILURE_REASONS = {
   "conflict": (hotkey) => i18nMain.t("hotkey.errors.alreadyRegistered", { hotkey }),
@@ -160,21 +164,20 @@ class HotkeyManager {
   async registerSlot(slotName, hotkey, callback) {
     this.unregisterSlot(slotName);
 
-    // On GNOME Wayland, route "agent" slot through the native GNOME keybinding
-    // system instead of Electron's globalShortcut. Temporary slots like "cancel"
-    // stay on globalShortcut (they don't need native registration).
-    if (this.useGnome && this.gnomeManager && slotName === "agent") {
+    // On GNOME (X11 or Wayland), route named slots through native gsettings
+    if (this.useGnome && this.gnomeManager && GNOME_NATIVE_SLOTS.has(slotName)) {
       const gnomeHotkey = GnomeShortcutManager.convertToGnomeFormat(hotkey);
       if (!gnomeHotkey) {
         debugLogger.log(
           `[HotkeyManager] Could not convert hotkey "${hotkey}" to GNOME format for slot "${slotName}"`
         );
-        return { success: false, error: `Invalid hotkey format for GNOME: "${hotkey}"` };
+        return { success: false, error: i18nMain.t("hotkey.errors.registrationFailed", { hotkey }) };
       }
 
-      // Register (or update) the agent callback on the shared D-Bus interface
       if (slotName === "agent") {
         this.gnomeManager.setAgentCallback(callback);
+      } else if (slotName === "meeting") {
+        this.gnomeManager.setMeetingCallback(callback);
       }
 
       const success = await this.gnomeManager.registerKeybinding(gnomeHotkey, slotName);
@@ -200,8 +203,10 @@ class HotkeyManager {
       return { success: true, hotkey };
     }
 
-    // On KDE (X11 or Wayland), route all slots through KGlobalAccel D-Bus
-    if (this.useKDE && this.kdeManager) {
+    // On KDE (X11 or Wayland), route persistent slots through KGlobalAccel D-Bus.
+    // Temporary slots like "cancel" stay on globalShortcut to avoid stale
+    // KGlobalAccel registrations after crash (Escape would stop working system-wide).
+    if (this.useKDE && this.kdeManager && slotName !== "cancel") {
       if (slotName === "agent") {
         this.kdeManager.setAgentCallback(callback);
       }
@@ -239,8 +244,8 @@ class HotkeyManager {
     const slot = this.slots.get(slotName);
     if (!slot || !slot.hotkey) return;
 
-    // On KDE (X11 or Wayland), all slots are managed via KGlobalAccel
-    if (this.useKDE && this.kdeManager) {
+    // On KDE (X11 or Wayland), persistent slots are managed via KGlobalAccel
+    if (this.useKDE && this.kdeManager && slotName !== "cancel") {
       this.kdeManager.unregisterKeybinding(slotName).catch((err) => {
         debugLogger.warn(
           `[HotkeyManager] Error unregistering KDE keybinding for slot "${slotName}":`,
@@ -252,8 +257,8 @@ class HotkeyManager {
       return;
     }
 
-    // On GNOME Wayland, "agent" slot is managed via gsettings, not globalShortcut
-    if (this.useGnome && this.gnomeManager && slotName === "agent") {
+    // On GNOME, native slots are managed via gsettings, not globalShortcut
+    if (this.useGnome && this.gnomeManager && GNOME_NATIVE_SLOTS.has(slotName)) {
       this.gnomeManager.unregisterKeybinding(slotName).catch((err) => {
         debugLogger.warn(
           `[HotkeyManager] Error unregistering GNOME keybinding for slot "${slotName}":`,
