@@ -233,9 +233,8 @@ class KDEShortcutManager {
     const actionId = [COMPONENT_NAME, slotName, "OpenWhispr", `OpenWhispr ${slotName}`];
 
     try {
-      // Pre-registration conflict check: query if another component already owns this key.
-      // We use a low-level D-Bus call because dbus-next proxy can't marshal the 'ai'
-      // signature correctly (it receives a number instead of an array).
+      // Pre-registration conflict check via low-level D-Bus call
+      // (dbus-next proxy can't marshal the 'ai' signature correctly).
       try {
         const dbusModule = getDBus();
         const msg = new dbusModule.Message({
@@ -266,17 +265,14 @@ class KDEShortcutManager {
         debugLogger.log("[KDEShortcut] Could not check for conflicts, proceeding:", checkErr.message);
       }
 
-      // Clear any stale registration first, then register with flag 0x02.
-      // Flag 0x02 (SetPresent) is required for globalShortcutPressed signal delivery.
-      // Flag 0 breaks signal delivery (shortcut registers but never fires).
-      // Stale values are handled by the explicit unRegister before doRegister.
+      // Clear stale registration, then register with flag 0x02 (SetPresent).
+      // Flag 0x02 overwrites any saved binding; flag 0 preserves stale values.
       try { await this.kglobalaccel.unRegister(actionId); } catch {}
       await this.kglobalaccel.doRegister(actionId);
       const result = await this.kglobalaccel.setShortcut(actionId, [qtKey], 0x02);
 
-      // Post-registration conflict check: setShortcut returns the actual key
-      // sequence assigned. If it differs from what we requested (e.g. returns [0]
-      // or empty), the key is owned by another component.
+      // Post-registration conflict check: if setShortcut assigned a different key,
+      // another component owns it.
       const assignedKey = Array.isArray(result) && result.length > 0 ? result[0] : null;
       if (assignedKey !== null && assignedKey !== qtKey) {
         debugLogger.log("[KDEShortcut] Shortcut conflict — setShortcut assigned different key", {

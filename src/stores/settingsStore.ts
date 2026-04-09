@@ -751,17 +751,14 @@ export async function initializeSettings(): Promise<void> {
       );
     }
 
-    // Show the active hotkey in UI (may differ from preferred if fallback is active).
-    // Updates zustand only, NOT localStorage, so the preference is preserved.
-    // The active key may not be set yet during early startup (hotkey registers after
-    // 1s delay), but will be available when Control Panel opens from the tray later.
+    // Show the active hotkey in UI (zustand only, not localStorage).
+    // May return constructor default during early startup; corrected by dictation-key-active event later.
     try {
       const activeKey = await window.electronAPI?.getActiveDictationKey?.();
       if (activeKey) {
         useSettingsStore.setState({ dictationKey: activeKey });
       }
     } catch {}
-
 
     // Sync agent key from main process
     try {
@@ -895,8 +892,7 @@ export async function initializeSettings(): Promise<void> {
     }
   });
 
-  // Active hotkey updates from backend fallback — update UI display only, not localStorage.
-  // localStorage keeps the user's preferred hotkey so the app retries it on next startup.
+  // Active hotkey updates from backend — zustand only, not localStorage.
   window.electronAPI?.onDictationKeyActive?.((key: string) => {
     useSettingsStore.setState({ dictationKey: key });
   });

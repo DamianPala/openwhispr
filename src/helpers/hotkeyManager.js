@@ -909,9 +909,7 @@ class HotkeyManager {
       if (success) {
         this.currentHotkey = fallback;
         debugLogger.log(`[HotkeyManager] ${backend} fallback hotkey "${fallback}" registered successfully`);
-        // Only persist to .env (for loadSavedHotkeyOrDefault fallback path).
-        // Do NOT update localStorage — it holds the user's preferred hotkey so the
-        // app retries it on next startup once the conflict is resolved.
+        // Persist to .env only, not localStorage (preserves user's preferred key for retry on next launch).
         await this._persistHotkeyToEnvFile(fallback);
         this.notifyActiveHotkey(fallback);
         this.notifyHotkeyFallback(hotkey, fallback);
