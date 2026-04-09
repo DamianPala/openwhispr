@@ -16,6 +16,7 @@ export interface TranscriptionSettings {
   preferredLanguage: string;
   sonioxSecondaryLanguage: string;
   sonioxKeepAliveTimeout: number;
+  sonioxWsUrl: string;
   cloudTranscriptionProvider: string;
   cloudTranscriptionModel: string;
   cloudTranscriptionBaseUrl?: string;
@@ -179,6 +180,8 @@ function useSettingsInternal() {
     setSonioxSecondaryLanguage: store.setSonioxSecondaryLanguage,
     sonioxKeepAliveTimeout: store.sonioxKeepAliveTimeout,
     setSonioxKeepAliveTimeout: store.setSonioxKeepAliveTimeout,
+    sonioxWsUrl: store.sonioxWsUrl,
+    setSonioxWsUrl: store.setSonioxWsUrl,
     cloudTranscriptionProvider: store.cloudTranscriptionProvider,
     cloudTranscriptionModel: store.cloudTranscriptionModel,
     cloudTranscriptionBaseUrl: store.cloudTranscriptionBaseUrl,

@@ -1977,6 +1977,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
             cloudTranscriptionModel,
             cloudTranscriptionMode,
             sonioxKeepAliveTimeout,
+            sonioxWsUrl,
           } = getSettings();
           const isExplicitLang = warmupLang && warmupLang !== "auto";
           const res = await provider.warmup({
@@ -1987,6 +1988,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
             model: cloudTranscriptionModel,
             mode: cloudTranscriptionMode === "byok" ? "byok" : "openwhispr",
             keepAliveTimeout: sonioxKeepAliveTimeout || 0,
+            wsUrl: sonioxWsUrl || undefined,
           });
           // Throw error to trigger retry if AUTH_EXPIRED
           if (!res.success && res.code) {
@@ -2202,6 +2204,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           sonioxSecondaryLanguage,
           cloudTranscriptionModel,
           cloudTranscriptionMode,
+          sonioxWsUrl,
         } = getSettings();
         const isExplicitLang = preferredLang && preferredLang !== "auto";
         const res = await provider.start({
@@ -2211,6 +2214,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           keyterms: this.getKeyterms(),
           model: cloudTranscriptionModel,
           mode: cloudTranscriptionMode === "byok" ? "byok" : "openwhispr",
+          wsUrl: sonioxWsUrl || undefined,
         });
 
         if (!res.success) {

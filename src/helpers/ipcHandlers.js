@@ -3405,6 +3405,7 @@ class IPCHandlers {
             secondaryLanguage: options.secondaryLanguage,
             customDictionary: options.keyterms,
             idleTimeoutMs: timeoutSeconds * 1000,
+            wsUrl: options.wsUrl,
           });
         }
 
@@ -3443,6 +3444,7 @@ class IPCHandlers {
             language: options.language,
             secondaryLanguage: options.secondaryLanguage,
             customDictionary: options.keyterms,
+            wsUrl: options.wsUrl,
           });
         }
         return { success: true, usedWarmConnection: hadWarm };

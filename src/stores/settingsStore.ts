@@ -119,6 +119,7 @@ export interface SettingsState
   setPreferredLanguage: (value: string) => void;
   setSonioxSecondaryLanguage: (value: string) => void;
   setSonioxKeepAliveTimeout: (value: number) => void;
+  setSonioxWsUrl: (value: string) => void;
   setCloudTranscriptionProvider: (value: string) => void;
   setCloudTranscriptionModel: (value: string) => void;
   setCloudTranscriptionBaseUrl: (value: string) => void;
@@ -241,6 +242,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   preferredLanguage: readString("preferredLanguage", "auto"),
   sonioxSecondaryLanguage: readString("sonioxSecondaryLanguage", ""),
   sonioxKeepAliveTimeout: parseInt(readString("sonioxKeepAliveTimeout", "0"), 10) || 0,
+  sonioxWsUrl: readString("sonioxWsUrl", "wss://stt-rt.soniox.com"),
   cloudTranscriptionProvider: readString("cloudTranscriptionProvider", "openai"),
   cloudTranscriptionModel: readString("cloudTranscriptionModel", "gpt-4o-mini-transcribe"),
   cloudTranscriptionBaseUrl: readString(
@@ -420,6 +422,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     set({ sonioxApiKey: key });
     window.electronAPI?.saveSonioxKey?.(key);
     invalidateApiKeyCaches();
+  },
+  setSonioxWsUrl: (url: string) => {
+    const cleaned = url.replace(/\/+$/, "").replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+    if (isBrowser) localStorage.setItem("sonioxWsUrl", cleaned);
+    set({ sonioxWsUrl: cleaned });
   },
   setCustomTranscriptionApiKey: (key: string) => {
     if (isBrowser) localStorage.setItem("customTranscriptionApiKey", key);

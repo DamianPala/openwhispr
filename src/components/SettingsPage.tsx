@@ -181,6 +181,8 @@ interface TranscriptionSectionProps {
   setMistralApiKey: (key: string) => void;
   sonioxApiKey: string;
   setSonioxApiKey: (key: string) => void;
+  sonioxWsUrl: string;
+  setSonioxWsUrl: (url: string) => void;
   sonioxSecondaryLanguage: string;
   setSonioxSecondaryLanguage: (lang: string) => void;
   sonioxKeepAliveTimeout: number;
@@ -222,6 +224,8 @@ function TranscriptionSection({
   setMistralApiKey,
   sonioxApiKey,
   setSonioxApiKey,
+  sonioxWsUrl,
+  setSonioxWsUrl,
   sonioxSecondaryLanguage,
   setSonioxSecondaryLanguage,
   sonioxKeepAliveTimeout,
@@ -404,6 +408,8 @@ function TranscriptionSection({
           setMistralApiKey={setMistralApiKey}
           sonioxApiKey={sonioxApiKey}
           setSonioxApiKey={setSonioxApiKey}
+          sonioxWsUrl={sonioxWsUrl}
+          setSonioxWsUrl={setSonioxWsUrl}
           sonioxSecondaryLanguage={sonioxSecondaryLanguage}
           setSonioxSecondaryLanguage={setSonioxSecondaryLanguage}
           sonioxKeepAliveTimeout={sonioxKeepAliveTimeout}
@@ -770,6 +776,8 @@ export default function SettingsPage({ activeSection = "general" }: SettingsPage
     setMistralApiKey,
     sonioxApiKey,
     setSonioxApiKey,
+    sonioxWsUrl,
+    setSonioxWsUrl,
     sonioxSecondaryLanguage,
     setSonioxSecondaryLanguage,
     sonioxKeepAliveTimeout,
@@ -3070,6 +3078,8 @@ EOF`,
             setMistralApiKey={setMistralApiKey}
             sonioxApiKey={sonioxApiKey}
             setSonioxApiKey={setSonioxApiKey}
+            sonioxWsUrl={sonioxWsUrl}
+            setSonioxWsUrl={setSonioxWsUrl}
             sonioxSecondaryLanguage={sonioxSecondaryLanguage}
             setSonioxSecondaryLanguage={setSonioxSecondaryLanguage}
             sonioxKeepAliveTimeout={sonioxKeepAliveTimeout}

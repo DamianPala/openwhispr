@@ -204,6 +204,8 @@ interface TranscriptionModelPickerProps {
   setCustomTranscriptionApiKey?: (key: string) => void;
   sonioxApiKey?: string;
   setSonioxApiKey?: (key: string) => void;
+  sonioxWsUrl?: string;
+  setSonioxWsUrl?: (url: string) => void;
   sonioxSecondaryLanguage?: string;
   setSonioxSecondaryLanguage?: (lang: string) => void;
   sonioxKeepAliveTimeout?: number;
@@ -290,6 +292,8 @@ export default function TranscriptionModelPicker({
   setCustomTranscriptionApiKey,
   sonioxApiKey = "",
   setSonioxApiKey,
+  sonioxWsUrl = "wss://stt-rt.soniox.com",
+  setSonioxWsUrl,
   sonioxSecondaryLanguage = "",
   setSonioxSecondaryLanguage,
   sonioxKeepAliveTimeout = 0,
@@ -908,6 +912,20 @@ export default function TranscriptionModelPicker({
               </div>
             ) : (
               <div className="space-y-2">
+                {selectedCloudProvider === "soniox" && variant === "settings" && setSonioxWsUrl && (
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium text-foreground">
+                      {t("transcription.endpointUrl")}
+                    </label>
+                    <Input
+                      value={sonioxWsUrl}
+                      onChange={(e) => setSonioxWsUrl(e.target.value)}
+                      placeholder="wss://stt-rt.soniox.com"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                )}
+
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-medium text-foreground">
