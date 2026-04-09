@@ -360,6 +360,8 @@ export default function TranscriptionModelPicker({
   const setCortiTenant = useSettingsStore((s) => s.setCortiTenant);
   const sonioxApiKey = useSettingsStore((s) => s.sonioxApiKey);
   const setSonioxApiKey = useSettingsStore((s) => s.setSonioxApiKey);
+  const sonioxWsUrl = useSettingsStore((s) => s.sonioxWsUrl);
+  const setSonioxWsUrl = useSettingsStore((s) => s.setSonioxWsUrl);
   const sonioxSecondaryLanguage = useSettingsStore((s) => s.sonioxSecondaryLanguage);
   const setSonioxSecondaryLanguage = useSettingsStore((s) => s.setSonioxSecondaryLanguage);
   const sonioxKeepAliveTimeout = useSettingsStore((s) => s.sonioxKeepAliveTimeout);
@@ -977,6 +979,20 @@ export default function TranscriptionModelPicker({
               </div>
             ) : (
               <div className="space-y-2">
+                {selectedCloudProvider === "soniox" && variant === "settings" && (
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium text-foreground">
+                      {t("transcription.endpointUrl")}
+                    </label>
+                    <Input
+                      value={sonioxWsUrl}
+                      onChange={(e) => setSonioxWsUrl(e.target.value)}
+                      placeholder="wss://stt-rt.soniox.com"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                )}
+
                 {providerCredentials.fields.map((field, index) => (
                   <div key={field.key} className="space-y-1.5">
                     <div className="flex items-center justify-between">

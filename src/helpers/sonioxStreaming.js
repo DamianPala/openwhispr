@@ -6,7 +6,8 @@ const DISCONNECT_TIMEOUT_MS = 3000;
 const KEEPALIVE_INTERVAL_MS = 5000;
 const KEEPALIVE_IDLE_LIMIT_MS = 30000; // Stop keepalive if no audio sent for 30s
 const COLD_START_BUFFER_MAX = 3 * 16000 * 2; // 3 seconds of 16-bit PCM at 16kHz
-const SONIOX_WS_URL = "wss://stt-rt.soniox.com/transcribe-websocket";
+const SONIOX_DEFAULT_BASE_URL = "wss://stt-rt.soniox.com";
+const SONIOX_WS_PATH = "/transcribe-websocket";
 
 const toBaseLanguage = (l) => l && l !== "auto" ? l.split("-")[0] : null;
 
@@ -93,8 +94,9 @@ class SonioxStreaming {
   }
 
   async connect(options = {}) {
-    const { apiKey, model, language, secondaryLanguage } = options;
+    const { apiKey, model, language, secondaryLanguage, wsUrl } = options;
     if (!apiKey) throw new Error("Soniox API key is required");
+    this.wsUrl = (wsUrl || SONIOX_DEFAULT_BASE_URL).replace(/\/+$/, "");
 
     if (this.isConnected) {
       debugLogger.debug("Soniox already connected");
@@ -124,7 +126,11 @@ class SonioxStreaming {
 
     const configMessage = buildConfigMessage(options);
 
+    const fullWsUrl = this.wsUrl + SONIOX_WS_PATH;
+
     debugLogger.debug("Soniox connecting", {
+      url: fullWsUrl,
+      apiKey: apiKey ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : "(none)",
       model: configMessage.model,
       languageHints: configMessage.language_hints,
       contextTerms: configMessage.context?.terms?.length || 0,
@@ -139,7 +145,7 @@ class SonioxStreaming {
         reject(new Error("Soniox WebSocket connection timeout"));
       }, WEBSOCKET_TIMEOUT_MS);
 
-      this.ws = new WebSocket(SONIOX_WS_URL);
+      this.ws = new WebSocket(fullWsUrl);
 
       this.ws.on("open", () => {
         debugLogger.debug("Soniox WebSocket opened, sending config");
@@ -408,7 +414,8 @@ class SonioxStreaming {
   // --- Warm connection (keep-alive between recordings) ---
 
   async warmup(options = {}) {
-    const { apiKey, model, language, secondaryLanguage, idleTimeoutMs } = options;
+    const { apiKey, model, language, secondaryLanguage, idleTimeoutMs, wsUrl } = options;
+    this.wsUrl = (wsUrl || this.wsUrl || SONIOX_DEFAULT_BASE_URL).replace(/\/+$/, "");
     if (!apiKey) throw new Error("Soniox API key is required for warmup");
 
     if (this.warmConnection) {
@@ -437,7 +444,7 @@ class SonioxStreaming {
         reject(new Error("Soniox warmup connection timeout"));
       }, WEBSOCKET_TIMEOUT_MS);
 
-      this.warmConnection = new WebSocket(SONIOX_WS_URL);
+      this.warmConnection = new WebSocket(this.wsUrl + SONIOX_WS_PATH);
 
       this.warmConnection.on("open", () => {
         debugLogger.debug("Soniox warm connection opened, sending config");

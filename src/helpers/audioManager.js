@@ -2379,6 +2379,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
             cortiEnvironment,
             cortiTenant,
             sonioxKeepAliveTimeout,
+            sonioxWsUrl,
           } = getSettings();
           const isExplicitLang = warmupLang && warmupLang !== "auto";
           const res = await provider.warmup({
@@ -2391,6 +2392,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
             environment: cortiEnvironment,
             tenant: cortiTenant,
             keepAliveTimeout: sonioxKeepAliveTimeout || 0,
+            wsUrl: sonioxWsUrl || undefined,
           });
           // Throw error to trigger retry if AUTH_EXPIRED
           if (!res.success && res.code) {
@@ -2620,6 +2622,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           cortiEnvironment,
           cortiTenant,
           useLocalWhisper,
+          sonioxWsUrl,
         } = getSettings();
         const isExplicitLang = preferredLang && preferredLang !== "auto";
         const res = await provider.start({
@@ -2631,6 +2634,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           mode: cloudTranscriptionMode === "byok" ? "byok" : "openwhispr",
           environment: cortiEnvironment,
           tenant: cortiTenant,
+          wsUrl: sonioxWsUrl || undefined,
         });
 
         if (!res.success) {
