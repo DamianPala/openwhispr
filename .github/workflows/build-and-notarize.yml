@@ -93,6 +93,8 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    env:
+      HAS_AZURE_SIGNING: ${{ secrets.AZURE_TENANT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -169,7 +171,7 @@ jobs:
 
       - name: Build Application
         run: npm run build:win -- --publish never -c.win.azureSignOptions=null
-        if: secrets.AZURE_TENANT_ID == ''
+        if: env.HAS_AZURE_SIGNING != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           VITE_NEON_AUTH_URL: ${{ vars.VITE_NEON_AUTH_URL }}
@@ -178,7 +180,7 @@ jobs:
 
       - name: Build and Sign Application
         run: npm run build:win -- --publish never
-        if: secrets.AZURE_TENANT_ID != ''
+        if: env.HAS_AZURE_SIGNING == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           VITE_NEON_AUTH_URL: ${{ vars.VITE_NEON_AUTH_URL }}
@@ -197,6 +199,8 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    env:
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -253,7 +257,7 @@ jobs:
           restore-keys: macos-${{ matrix.arch }}-electron-
 
       - name: Setup macOS Code Signing
-        if: github.event_name != 'pull_request' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+        if: github.event_name != 'pull_request' && env.HAS_APPLE_SIGNING == 'true'
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -290,7 +294,7 @@ jobs:
           VITE_NEON_AUTH_URL: ${{ vars.VITE_NEON_AUTH_URL }}
           VITE_OPENWHISPR_API_URL: ${{ vars.VITE_OPENWHISPR_API_URL }}
           VITE_OPENWHISPR_OAUTH_CALLBACK_URL: ${{ vars.VITE_OPENWHISPR_OAUTH_CALLBACK_URL }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ github.event_name != 'pull_request' && secrets.APPLE_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ github.event_name != 'pull_request' && env.HAS_APPLE_SIGNING == 'true' && 'true' || 'false' }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -304,7 +308,7 @@ jobs:
           retention-days: 7
 
       - name: Cleanup Certificates
-        if: always() && github.event_name != 'pull_request' && secrets.APPLE_CERTIFICATE_BASE64 != ''
+        if: always() && github.event_name != 'pull_request' && env.HAS_APPLE_SIGNING == 'true'
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
           rm -f $RUNNER_TEMP/build_certificate.p12
