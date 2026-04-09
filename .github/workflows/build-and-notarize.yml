@@ -169,8 +169,16 @@ jobs:
           echo "GOOGLE_CALENDAR_CLIENT_ID=${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}" >> .env
           echo "GOOGLE_CALENDAR_CLIENT_SECRET=${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}" >> .env
 
+      - name: Remove Azure signing config (unsigned build)
+        if: env.HAS_AZURE_SIGNING != 'true'
+        shell: pwsh
+        run: |
+          $cfg = Get-Content electron-builder.json | ConvertFrom-Json
+          $cfg.win.PSObject.Properties.Remove('azureSignOptions')
+          $cfg | ConvertTo-Json -Depth 10 | Set-Content electron-builder.json
+
       - name: Build Application
-        run: npm run build:win -- --publish never -c.win.azureSignOptions=null
+        run: npm run build:win -- --publish never
         if: env.HAS_AZURE_SIGNING != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
