@@ -295,8 +295,9 @@ class KDEShortcutManager {
       const listening = await this._listenForComponent();
       if (!listening) {
         debugLogger.log(
-          `[KDEShortcut] Keybinding registered but listener failed for "${slotName}"`
+          `[KDEShortcut] Keybinding registered but listener failed for "${slotName}", unregistering`
         );
+        try { await this.kglobalaccel.unRegister(actionId); } catch {}
         return false;
       }
 

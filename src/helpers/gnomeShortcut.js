@@ -19,22 +19,38 @@ const SLOT_CONFIG = {
 
 const KEYBINDING_SCHEMA = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding";
 
-// Valid pattern for GNOME shortcut format (e.g., "<Alt>r", "<Control><Shift>space")
-// Supports: letters/digits, function keys (F1-F24), navigation, and special keys
+// Valid pattern for GNOME shortcut format using X11 keysym names (case-sensitive).
+// Modifiers are case-insensitive (GTK normalizes them), keysyms are exact.
 const VALID_SHORTCUT_PATTERN =
-  /^(<(Control|Alt|Shift|Super)>)*(F([1-9]|1[0-9]|2[0-4])|[a-z0-9]|space|escape|tab|backspace|grave|pause|scroll_lock|insert|delete|home|end|page_up|page_down|up|down|left|right|return|print)$/i;
+  /^(<(Control|Alt|Shift|Super)>)*(F([1-9]|1[0-9]|2[0-4])|[a-z0-9]|space|Escape|Tab|BackSpace|grave|Pause|Scroll_Lock|Insert|Delete|Home|End|Page_Up|Page_Down|Up|Down|Left|Right|Return|Print)$/;
 
-// Map Electron key names to GNOME keysym names
+// Map Electron key names (lowercased) to X11 keysym names (case-sensitive).
+// Source: X11/keysymdef.h, lookup via XStringToKeysym(3).
 const ELECTRON_TO_GNOME_KEY_MAP = {
-  pageup: "page_up",
-  pagedown: "page_down",
-  scrolllock: "scroll_lock",
-  printscreen: "print",
-  enter: "return",
-  arrowup: "up",
-  arrowdown: "down",
-  arrowleft: "left",
-  arrowright: "right",
+  space: "space",
+  tab: "Tab",
+  escape: "Escape",
+  backspace: "BackSpace",
+  delete: "Delete",
+  return: "Return",
+  enter: "Return",
+  home: "Home",
+  end: "End",
+  insert: "Insert",
+  pause: "Pause",
+  print: "Print",
+  printscreen: "Print",
+  pageup: "Page_Up",
+  pagedown: "Page_Down",
+  scrolllock: "Scroll_Lock",
+  arrowup: "Up",
+  arrowdown: "Down",
+  arrowleft: "Left",
+  arrowright: "Right",
+  up: "Up",
+  down: "Down",
+  left: "Left",
+  right: "Right",
 };
 
 let dbus = null;
@@ -184,6 +200,21 @@ class GnomeShortcutManager {
       const existing = this.getExistingKeybindings();
       const alreadyRegistered = existing.includes(keybindingPath);
 
+      // Check if another custom shortcut already uses this binding
+      debugLogger.log("[GnomeShortcut] Checking for conflicts", {
+        shortcut,
+        existingPaths: existing,
+        ownPath: keybindingPath,
+      });
+      const conflict = this.findConflictingBinding(shortcut, existing, keybindingPath);
+      if (conflict) {
+        debugLogger.log(`[GnomeShortcut] Shortcut conflict — "${shortcut}" already used by "${conflict}"`, {
+          slot: slotName,
+          conflictPath: conflict,
+        });
+        return false;
+      }
+
       execFileSync(
         "gsettings",
         ["set", `${KEYBINDING_SCHEMA}:${keybindingPath}`, "name", keybindingName],
@@ -311,6 +342,33 @@ class GnomeShortcutManager {
     }
   }
 
+  findConflictingBinding(shortcut, existingPaths, ownPath) {
+    // Normalize for comparison: <Primary> = <Control>, sort modifiers, case-insensitive
+    const normalize = (s) => {
+      const mods = [];
+      const stripped = s.replace(/<(\w+)>/gi, (_, m) => {
+        mods.push(m.toLowerCase() === "primary" ? "control" : m.toLowerCase());
+        return "";
+      });
+      mods.sort();
+      return mods.map((m) => `<${m}>`).join("") + stripped.toLowerCase();
+    };
+    const normalizedShortcut = normalize(shortcut);
+
+    for (const path of existingPaths) {
+      if (path === ownPath) continue;
+      try {
+        const binding = execFileSync(
+          "gsettings",
+          ["get", `${KEYBINDING_SCHEMA}:${path}`, "binding"],
+          { encoding: "utf-8" }
+        ).trim().replace(/^'|'$/g, "");
+        if (normalize(binding) === normalizedShortcut) return path;
+      } catch {}
+    }
+    return null;
+  }
+
   getExistingKeybindings() {
     try {
       const output = execFileSync(
@@ -360,16 +418,19 @@ class GnomeShortcutManager {
       .filter(Boolean)
       .join("");
 
-    let gnomeKey = key.toLowerCase();
+    const keyLower = key.toLowerCase();
 
-    if (gnomeKey === "`" || gnomeKey === "backquote") {
+    let gnomeKey;
+    if (key === "`" || keyLower === "backquote") {
       gnomeKey = "grave";
-    }
-    if (gnomeKey === " ") {
+    } else if (key === " ") {
       gnomeKey = "space";
-    }
-    if (ELECTRON_TO_GNOME_KEY_MAP[gnomeKey]) {
-      gnomeKey = ELECTRON_TO_GNOME_KEY_MAP[gnomeKey];
+    } else if (ELECTRON_TO_GNOME_KEY_MAP[keyLower]) {
+      gnomeKey = ELECTRON_TO_GNOME_KEY_MAP[keyLower];
+    } else if (/^F\d+$/i.test(key)) {
+      gnomeKey = key.toUpperCase();
+    } else {
+      gnomeKey = keyLower;
     }
 
     return modifiers + gnomeKey;

@@ -1735,11 +1735,21 @@ class IPCHandlers {
           const result = await hotkeyManager.kdeManager.registerKeybinding(effectiveHotkey, "dictation", callback);
           if (result === true) {
             hotkeyManager.currentHotkey = effectiveHotkey;
+          } else {
+            debugLogger.warn(`[IPC] Failed to re-register KDE keybinding "${effectiveHotkey}" after capture mode`, { result });
           }
         }
       }
 
       return { success: true };
+    });
+
+    ipcMain.handle("get-active-dictation-key", () => {
+      return this.windowManager.hotkeyManager.getCurrentHotkey() || "";
+    });
+
+    ipcMain.handle("get-effective-default-hotkey", () => {
+      return this.windowManager.hotkeyManager.getEffectiveDefaultHotkey();
     });
 
     ipcMain.handle("get-hotkey-mode-info", async () => {

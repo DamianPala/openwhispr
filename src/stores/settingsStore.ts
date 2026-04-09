@@ -733,11 +733,15 @@ export async function initializeSettings(): Promise<void> {
       );
     }
 
-    // Sync dictation key from main process
+    // Sync dictation key from main process.
+    // localStorage holds the user's preferred hotkey. Only populate from .env
+    // when localStorage is empty (fresh install / cleared data).
     try {
-      const envKey = await window.electronAPI.getDictationKey?.();
-      if (envKey && envKey !== state.dictationKey) {
-        createStringSetter("dictationKey")(envKey);
+      if (!state.dictationKey) {
+        const envKey = await window.electronAPI.getDictationKey?.();
+        if (envKey) {
+          createStringSetter("dictationKey")(envKey);
+        }
       }
     } catch (err) {
       logger.warn(
@@ -746,6 +750,18 @@ export async function initializeSettings(): Promise<void> {
         "settings"
       );
     }
+
+    // Show the active hotkey in UI (may differ from preferred if fallback is active).
+    // Updates zustand only, NOT localStorage, so the preference is preserved.
+    // The active key may not be set yet during early startup (hotkey registers after
+    // 1s delay), but will be available when Control Panel opens from the tray later.
+    try {
+      const activeKey = await window.electronAPI?.getActiveDictationKey?.();
+      if (activeKey) {
+        useSettingsStore.setState({ dictationKey: activeKey });
+      }
+    } catch {}
+
 
     // Sync agent key from main process
     try {
@@ -877,6 +893,12 @@ export async function initializeSettings(): Promise<void> {
     if (key === "uiLanguage" && typeof value === "string") {
       void i18n.changeLanguage(value);
     }
+  });
+
+  // Active hotkey updates from backend fallback — update UI display only, not localStorage.
+  // localStorage keeps the user's preferred hotkey so the app retries it on next startup.
+  window.electronAPI?.onDictationKeyActive?.((key: string) => {
+    useSettingsStore.setState({ dictationKey: key });
   });
 
   // Sync settings pushed from main process (e.g., hotkey changed in control panel)
