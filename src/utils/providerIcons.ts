@@ -23,6 +23,7 @@ import openrouterIcon from "@/assets/icons/providers/openrouter.svg";
 import tinfoilIcon from "@/assets/icons/providers/tinfoil.svg";
 import deepgramIcon from "@/assets/icons/providers/deepgram.svg";
 import assemblyaiIcon from "@/assets/icons/providers/assemblyai.svg";
+import sonioxIcon from "@/assets/icons/providers/soniox.svg";
 
 export const PROVIDER_ICONS: Record<string, string> = {
   oruk: orukIcon,
@@ -48,6 +49,7 @@ export const PROVIDER_ICONS: Record<string, string> = {
   tinfoil: tinfoilIcon,
   deepgram: deepgramIcon,
   assemblyai: assemblyaiIcon,
+  soniox: sonioxIcon,
 };
 
 export function getProviderIcon(provider: string): string | undefined {
