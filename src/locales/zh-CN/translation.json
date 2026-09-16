@@ -860,6 +860,22 @@
       "environment": "数据区域",
       "tenant": "租户"
     },
+    "soniox": {
+      "region": "数据区域",
+      "secondaryLanguage": "辅助语言",
+      "secondaryLanguageNone": "无",
+      "keepAlive": {
+        "label": "保持连接",
+        "description": "在两次录音之间保持连接畅通，以便下次录音立即开始，需额外付费。",
+        "options": {
+          "0": "关闭",
+          "30": "30 秒",
+          "60": "1 分钟",
+          "120": "2 分钟",
+          "300": "5 分钟"
+        }
+      }
+    },
     "tinfoil": {
       "transportNote": "Tinfoil 流式转录使用 Voxtral Mini 4B，批量转录使用 Voxtral Small 24B。",
       "docsLink": "查看文档"
@@ -2553,7 +2569,8 @@
         "deepgram_nova_3": "Deepgram 最精准的实时模型",
         "assemblyai_universal_streaming_english": "不会变动的实时转录（英语）",
         "assemblyai_universal_streaming_multilingual": "不会变动的实时转录（多语言）",
-        "assemblyai_universal_3_5_pro": "最高精度实时转录，支持 18 种语言"
+        "assemblyai_universal_3_5_pro": "最高精度实时转录，支持 18 种语言",
+        "soniox_stt_rt_v5": "实时流式语音转文字，支持 60 多种语言"
       },
       "cloud": {
         "openai_gpt_5_2": "强大的推理模型",

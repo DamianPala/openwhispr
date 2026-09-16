@@ -860,6 +860,22 @@
       "environment": "Regione dei dati",
       "tenant": "Tenant"
     },
+    "soniox": {
+      "region": "Regione dei dati",
+      "secondaryLanguage": "Lingua secondaria",
+      "secondaryLanguageNone": "Nessuna",
+      "keepAlive": {
+        "label": "Keep-Alive",
+        "description": "Mantiene attiva la connessione tra le registrazioni per un avvio istantaneo, con un costo aggiuntivo.",
+        "options": {
+          "0": "Disattivato",
+          "30": "30 secondi",
+          "60": "1 minuto",
+          "120": "2 minuti",
+          "300": "5 minuti"
+        }
+      }
+    },
     "tinfoil": {
       "transportNote": "Tinfoil trasmette con Voxtral Mini 4B ed elabora i batch con Voxtral Small 24B.",
       "docsLink": "Leggi la documentazione"
@@ -2553,7 +2569,8 @@
         "deepgram_nova_3": "Il modello in tempo reale più accurato di Deepgram",
         "assemblyai_universal_streaming_english": "Trascrizioni in tempo reale immutabili, inglese",
         "assemblyai_universal_streaming_multilingual": "Trascrizioni in tempo reale immutabili, multilingue",
-        "assemblyai_universal_3_5_pro": "Massima precisione in tempo reale, 18 lingue"
+        "assemblyai_universal_3_5_pro": "Massima precisione in tempo reale, 18 lingue",
+        "soniox_stt_rt_v5": "Trascrizione vocale in tempo reale, oltre 60 lingue"
       },
       "cloud": {
         "openai_gpt_5_2": "Modello di ragionamento potente",

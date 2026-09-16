@@ -860,6 +860,22 @@
       "environment": "資料區域",
       "tenant": "租戶"
     },
+    "soniox": {
+      "region": "資料區域",
+      "secondaryLanguage": "輔助語言",
+      "secondaryLanguageNone": "無",
+      "keepAlive": {
+        "label": "保持連線",
+        "description": "在兩次錄音之間保持連線暢通，以便下次錄音立即開始，需額外付費。",
+        "options": {
+          "0": "關閉",
+          "30": "30 秒",
+          "60": "1 分鐘",
+          "120": "2 分鐘",
+          "300": "5 分鐘"
+        }
+      }
+    },
     "tinfoil": {
       "transportNote": "Tinfoil 串流轉錄使用 Voxtral Mini 4B，批次轉錄使用 Voxtral Small 24B。",
       "docsLink": "查看文件"
@@ -2553,7 +2569,8 @@
         "deepgram_nova_3": "Deepgram 最精準的即時模型",
         "assemblyai_universal_streaming_english": "不會變動的即時轉錄（英文）",
         "assemblyai_universal_streaming_multilingual": "不會變動的即時轉錄（多語言）",
-        "assemblyai_universal_3_5_pro": "最高精度即時轉錄，支援 18 種語言"
+        "assemblyai_universal_3_5_pro": "最高精度即時轉錄，支援 18 種語言",
+        "soniox_stt_rt_v5": "即時串流語音轉文字，支援 60 多種語言"
       },
       "cloud": {
         "openai_gpt_5_2": "強大的推理模型",

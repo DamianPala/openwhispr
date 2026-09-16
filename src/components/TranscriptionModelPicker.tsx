@@ -9,6 +9,8 @@ import { ProviderTabs } from "./ui/ProviderTabs";
 import ModelCardList from "./ui/ModelCardList";
 import { DownloadProgressBar } from "./ui/DownloadProgressBar";
 import ApiKeyInput from "./ui/ApiKeyInput";
+import LanguageSelector, { type LanguageOption } from "./ui/LanguageSelector";
+import languageRegistry from "../config/languageRegistry.json";
 import { ConfirmDialog } from "./ui/dialog";
 import { useDialogs } from "../hooks/useDialogs";
 import { useModelDownload, type DownloadProgress } from "../hooks/useModelDownload";
@@ -240,6 +242,12 @@ interface TranscriptionModelPickerProps {
   streamingOnly?: boolean;
 }
 
+const SECONDARY_LANGUAGE_OPTIONS: LanguageOption[] = languageRegistry.languages
+  .filter((l) => l.code !== "auto")
+  .map(({ code, label, flag }) => ({ value: code, label, flag }));
+
+const SONIOX_KEEP_ALIVE_OPTIONS = [0, 30, 60, 120, 300];
+
 const CLOUD_PROVIDER_TABS = [
   { id: "openai", name: "OpenAI" },
   { id: "groq", name: "Groq" },
@@ -250,6 +258,7 @@ const CLOUD_PROVIDER_TABS = [
   { id: "tinfoil", name: "Tinfoil" },
   { id: "deepgram", name: "Deepgram" },
   { id: "assemblyai", name: "AssemblyAI" },
+  { id: "soniox", name: "Soniox" },
   { id: "custom", name: "Custom" },
 ];
 
@@ -266,7 +275,9 @@ interface ProviderCredentialField {
     | "cortiTenant"
     | "tinfoilApiKey"
     | "deepgramApiKey"
-    | "assemblyaiApiKey";
+    | "assemblyaiApiKey"
+    | "sonioxApiKey"
+    | "sonioxRegion";
   input: "secret" | "text" | "select";
   labelKey?: string;
   placeholder?: string;
@@ -330,6 +341,21 @@ const PROVIDER_CREDENTIALS: Record<
   assemblyai: {
     consoleUrl: "https://www.assemblyai.com/dashboard/api-keys",
     fields: [{ key: "assemblyaiApiKey", input: "secret" }],
+  },
+  soniox: {
+    consoleUrl: "https://console.soniox.com",
+    fields: [
+      { key: "sonioxApiKey", input: "secret" },
+      {
+        key: "sonioxRegion",
+        input: "select",
+        labelKey: "transcription.soniox.region",
+        options: [
+          { value: "us", label: "US" },
+          { value: "eu", label: "EU" },
+        ],
+      },
+    ],
   },
 };
 
@@ -423,6 +449,16 @@ export default function TranscriptionModelPicker({
   const setDeepgramApiKey = useSettingsStore((s) => s.setDeepgramApiKey);
   const assemblyaiApiKey = useSettingsStore((s) => s.assemblyaiApiKey);
   const setAssemblyaiApiKey = useSettingsStore((s) => s.setAssemblyaiApiKey);
+  const sonioxApiKey = useSettingsStore((s) => s.sonioxApiKey);
+  const setSonioxApiKey = useSettingsStore((s) => s.setSonioxApiKey);
+  const sonioxRegion = useSettingsStore((s) => s.sonioxRegion);
+  const setSonioxRegion = useSettingsStore((s) => s.setSonioxRegion);
+  const sonioxSecondaryLanguage = useSettingsStore((s) => s.sonioxSecondaryLanguage);
+  const setSonioxSecondaryLanguage = useSettingsStore((s) => s.setSonioxSecondaryLanguage);
+  const sonioxKeepAliveTimeout = useSettingsStore((s) => s.sonioxKeepAliveTimeout);
+  const setSonioxKeepAliveTimeout = useSettingsStore((s) => s.setSonioxKeepAliveTimeout);
+  const preferredLanguage = useSettingsStore((s) => s.preferredLanguage);
+  const isAutoLanguage = !preferredLanguage || preferredLanguage === "auto";
   const customTranscriptionApiKey = useSettingsStore((s) => s.customTranscriptionApiKey);
   const setCustomTranscriptionApiKey = useSettingsStore((s) => s.setCustomTranscriptionApiKey);
   const isSignedIn = useSettingsStore((s) => s.isSignedIn);
@@ -985,6 +1021,8 @@ export default function TranscriptionModelPicker({
     tinfoilApiKey,
     deepgramApiKey,
     assemblyaiApiKey,
+    sonioxApiKey,
+    sonioxRegion,
   };
   const credentialSetters: Record<ProviderCredentialField["key"], (value: string) => void> = {
     openaiApiKey: setOpenaiApiKey,
@@ -999,6 +1037,8 @@ export default function TranscriptionModelPicker({
     tinfoilApiKey: setTinfoilApiKey,
     deepgramApiKey: setDeepgramApiKey,
     assemblyaiApiKey: setAssemblyaiApiKey,
+    sonioxApiKey: setSonioxApiKey,
+    sonioxRegion: setSonioxRegion,
   };
 
   const cloudModelOptions = useMemo(() => {
@@ -1292,6 +1332,63 @@ export default function TranscriptionModelPicker({
                       )}
                     </div>
                   ))}
+
+                  {displayedCloudProvider === "soniox" && (
+                    <div
+                      className={`flex items-center justify-between gap-3 ${
+                        isAutoLanguage ? "opacity-50 pointer-events-none" : ""
+                      }`}
+                    >
+                      <label className="text-xs font-medium text-foreground whitespace-nowrap">
+                        {t("transcription.soniox.secondaryLanguage")}
+                      </label>
+                      <LanguageSelector
+                        value={isAutoLanguage ? "none" : sonioxSecondaryLanguage || "none"}
+                        onChange={(value) =>
+                          setSonioxSecondaryLanguage(value === "none" ? "" : value)
+                        }
+                        options={[
+                          {
+                            value: "none",
+                            label: t("transcription.soniox.secondaryLanguageNone"),
+                            flag: "",
+                          },
+                          ...SECONDARY_LANGUAGE_OPTIONS,
+                        ]}
+                        className="min-w-32"
+                      />
+                    </div>
+                  )}
+
+                  {displayedCloudProvider === "soniox" && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="text-xs font-medium text-foreground whitespace-nowrap">
+                          {t("transcription.soniox.keepAlive.label")}
+                        </label>
+                        <Select
+                          value={String(sonioxKeepAliveTimeout)}
+                          onValueChange={(value) => setSonioxKeepAliveTimeout(Number(value))}
+                        >
+                          <SelectTrigger className="min-w-32 h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {SONIOX_KEEP_ALIVE_OPTIONS.map((seconds) => (
+                              <SelectItem key={seconds} value={String(seconds)}>
+                                {t(`transcription.soniox.keepAlive.options.${seconds}`)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {sonioxKeepAliveTimeout > 0 && (
+                        <p className="text-[10px] text-muted-foreground">
+                          {t("transcription.soniox.keepAlive.description")}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-foreground">
