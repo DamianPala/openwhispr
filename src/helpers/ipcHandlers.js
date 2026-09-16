@@ -85,6 +85,8 @@ const HyprlandShortcutManager = require("./hyprlandShortcut");
 const AssemblyAiStreaming = require("./assemblyAiStreaming");
 const { i18nMain, changeLanguage } = require("./i18nMain");
 const DeepgramStreaming = require("./deepgramStreaming");
+const SonioxStreaming = require("./sonioxStreaming");
+const { DEFAULT_MODEL: SONIOX_DEFAULT_MODEL } = SonioxStreaming;
 const { GeminiLiveStreaming, GEMINI_LIVE_MODEL } = require("./geminiLiveStreaming");
 const CortiStreaming = require("./cortiStreaming");
 const OpenAIRealtimeStreaming = require("./openaiRealtimeStreaming");
@@ -629,6 +631,7 @@ class IPCHandlers {
     this._micHoldSenders = new Map();
     this.assemblyAiStreaming = null;
     this.deepgramStreaming = null;
+    this.sonioxStreaming = null;
     this.geminiStreaming = null;
     this.cortiStreaming = null;
     this._dictationStreaming = null;
@@ -10889,6 +10892,144 @@ class IPCHandlers {
       }
       return this.deepgramStreaming.getStatus();
     });
+
+    let sonioxStreamingStartInProgress = false;
+    let sonioxSendDropCount = 0;
+    // One handshake at a time — a start racing an in-flight connect awaits it
+    // instead of opening a second socket and losing track of the first.
+    let sonioxConnectInFlight = null;
+
+    // Re-bound on every warmup/start so a warm socket promoted by a different
+    // window can never emit into the window that opened it.
+    const ensureSonioxStreaming = (event) => {
+      if (!this.sonioxStreaming) {
+        this.sonioxStreaming = new SonioxStreaming();
+      }
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const emit = (channel, payload) => {
+        if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+      };
+      const streaming = this.sonioxStreaming;
+      streaming.onPartialTranscript = (text) => emit("soniox-partial-transcript", text);
+      streaming.onFinalTranscript = (text) => emit("soniox-final-transcript", text);
+      streaming.onError = (error) => emit("soniox-error", error.message);
+      streaming.onSessionEnd = (data) => emit("soniox-session-end", data);
+      return streaming;
+    };
+
+    const SONIOX_TOKEN_OPTIONS = { mode: "byok", provider: "soniox-realtime" };
+
+    const connectSonioxStreaming = (event, options) => {
+      if (sonioxConnectInFlight) return sonioxConnectInFlight;
+      sonioxConnectInFlight = (async () => {
+        const streaming = ensureSonioxStreaming(event);
+        const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
+        await streaming.connect({ ...options, apiKey });
+      })().finally(() => {
+        sonioxConnectInFlight = null;
+      });
+      return sonioxConnectInFlight;
+    };
+
+    ipcMain.handle("soniox-streaming-warmup", async (event, options = {}) => {
+      try {
+        // keepAliveTimeout 0 = user opted out of paid idle sockets (settingsStore.ts).
+        if (!(options.keepAliveTimeout > 0)) return { success: true };
+        const streaming = ensureSonioxStreaming(event);
+        if (streaming.hasWarmConnection() || streaming.isConnected) {
+          return { success: true, alreadyWarm: true };
+        }
+        const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
+        await streaming.warmup({
+          ...options,
+          apiKey,
+          idleTimeoutMs: options.keepAliveTimeout * 1000,
+        });
+        return { success: true };
+      } catch (error) {
+        debugLogger.error("Soniox warmup error", { error: error.message });
+        return toPolicyFailure(error);
+      }
+    });
+
+    ipcMain.handle("soniox-streaming-start", async (event, options = {}) => {
+      if (sonioxStreamingStartInProgress) {
+        debugLogger.debug("Soniox streaming start already in progress, ignoring", {}, "streaming");
+        return { success: false, error: "Operation in progress" };
+      }
+      sonioxStreamingStartInProgress = true;
+      try {
+        const streaming = ensureSonioxStreaming(event);
+        if (sonioxConnectInFlight) await sonioxConnectInFlight;
+        if (streaming.isConnected) await streaming.disconnect(false);
+        const usedWarmConnection = streaming.hasWarmConnection();
+        await connectSonioxStreaming(event, options);
+        sonioxSendDropCount = 0;
+        debugLogger.debug("Soniox streaming started", { usedWarmConnection }, "streaming");
+        return { success: true, usedWarmConnection };
+      } catch (error) {
+        debugLogger.error("Soniox streaming start error", { error: error.message });
+        return streamingStartFailure(error);
+      } finally {
+        sonioxStreamingStartInProgress = false;
+      }
+    });
+
+    ipcMain.on("soniox-streaming-send", (_event, audioBuffer) => {
+      try {
+        if (!this.sonioxStreaming) return;
+        const sent = this.sonioxStreaming.sendAudio(Buffer.from(audioBuffer));
+        if (!sent) {
+          sonioxSendDropCount++;
+          if (sonioxSendDropCount <= 3 || sonioxSendDropCount % 50 === 0) {
+            debugLogger.warn(
+              "Soniox audio send dropped",
+              {
+                dropCount: sonioxSendDropCount,
+                isConnected: this.sonioxStreaming.isConnected,
+                wsReadyState: this.sonioxStreaming.ws?.readyState,
+              },
+              "streaming"
+            );
+          }
+        } else if (sonioxSendDropCount > 0) {
+          debugLogger.debug(
+            "Soniox audio send resumed after drops",
+            { previousDrops: sonioxSendDropCount },
+            "streaming"
+          );
+          sonioxSendDropCount = 0;
+        }
+      } catch (error) {
+        debugLogger.error("Soniox streaming send error", { error: error.message });
+      }
+    });
+
+    ipcMain.on("soniox-streaming-finalize", () => {
+      this.sonioxStreaming?.finalize();
+    });
+
+    ipcMain.handle("soniox-streaming-stop", async () => {
+      try {
+        const model = this.sonioxStreaming?.currentModel || SONIOX_DEFAULT_MODEL;
+        const audioBytesSent = this.sonioxStreaming?.audioBytesSent || 0;
+        // Not cleared to null: a warm connection (sonioxKeepAliveTimeout > 0)
+        // must survive the recording that just ended.
+        const result = this.sonioxStreaming
+          ? await this.sonioxStreaming.disconnect(true)
+          : { text: "" };
+        return { success: true, text: result?.text || "", model, audioBytesSent };
+      } catch (error) {
+        debugLogger.error("Soniox streaming stop error", { error: error.message });
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle("soniox-streaming-status", async () =>
+      this.sonioxStreaming
+        ? this.sonioxStreaming.getStatus()
+        : { isConnected: false, sessionId: null }
+    );
 
     let geminiStreamingStartInProgress = false;
     let geminiSendDropCount = 0;

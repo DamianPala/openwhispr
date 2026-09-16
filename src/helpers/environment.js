@@ -57,6 +57,7 @@ const PERSISTED_KEYS = [
   "AZURE_OPENAI_API_VERSION",
   "VERTEX_PROJECT",
   "VERTEX_LOCATION",
+  "SONIOX_WS_URL",
 ];
 
 // Module-level so writes are serialized across all instances — hotkeyManager

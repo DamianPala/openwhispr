@@ -60,6 +60,9 @@ test("a dictation-only streaming provider is not offered for note recording", as
 
   assert.ok(streamingIds.includes("gemini"), "gemini ships a streaming dictation model");
   assert.equal(meetingIds.includes("gemini"), false);
+
+  assert.ok(streamingIds.includes("soniox"), "soniox ships a streaming dictation model");
+  assert.equal(meetingIds.includes("soniox"), false, "soniox is dictation-only");
 });
 
 // The intersection is an allow-list, so a new streaming provider is silently
@@ -84,6 +87,8 @@ test("allow-list rejects unknown and batch-only providers", async () => {
     "openai",
     "deepgram",
     "assemblyai",
+    "soniox",
+    "soniox-realtime",
     "mistral-realtime",
     "grok-stt",
     "",

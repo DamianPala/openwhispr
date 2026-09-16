@@ -80,6 +80,13 @@ const BYOK_API_KEYS = [
     save: "saveAssemblyAIKey",
     storeKey: "assemblyaiApiKey",
   },
+  {
+    base: "soniox",
+    env: "SONIOX_API_KEY",
+    get: "getSonioxKey",
+    save: "saveSonioxKey",
+    storeKey: "sonioxApiKey",
+  },
   // Per-scope Custom-endpoint keys. Dictation cleanup's counterpart predates
   // this manifest and keeps its bespoke accessors (CUSTOM_CLEANUP_API_KEY).
   {

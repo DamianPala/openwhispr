@@ -65,3 +65,41 @@ test("batch dictation on a keyed realtime-only provider fails closed on the tran
     return true;
   });
 });
+
+// Second pass with a BYOK-only provider that has no managed tier at all
+// (Soniox), pinning that the guard is provider-agnostic, not Deepgram-specific.
+test("batch dictation on a keyless soniox reports the missing key, not OpenAI's", async (t) => {
+  const manager = await loadManager(t);
+  setSettings({ cloudTranscriptionProvider: "soniox", cloudTranscriptionModel: "stt-rt-v5" });
+  let openAiKeyReads = 0;
+  globalThis.window.electronAPI.getOpenAIKey = async () => {
+    openAiKeyReads += 1;
+    return "";
+  };
+
+  await assert.rejects(manager.processWithOpenAIAPI(audioBlob()), (error) => {
+    assert.equal(error.code, "API_KEY_MISSING");
+    assert.equal(error.messageKey, "hooks.audioRecording.errorDescriptions.providerKeyMissing");
+    assert.doesNotMatch(error.message, /OpenAI/);
+    return true;
+  });
+  assert.equal(openAiKeyReads, 0, "the route guard runs before any key read");
+});
+
+test("batch dictation on a keyed soniox fails closed on the transport", async (t) => {
+  const manager = await loadManager(t);
+  setSettings({
+    cloudTranscriptionProvider: "soniox",
+    cloudTranscriptionModel: "stt-rt-v5",
+    sonioxApiKey: "sx-test",
+  });
+  globalThis.window.electronAPI.getOpenAIKey = async () => {
+    throw new Error("must not read the OpenAI key");
+  };
+
+  await assert.rejects(manager.processWithOpenAIAPI(audioBlob()), (error) => {
+    assert.equal(error.code, "STREAMING_ONLY_PROVIDER");
+    assert.equal(error.messageKey, "hooks.audioRecording.errorDescriptions.streamingOnlyProvider");
+    return true;
+  });
+});

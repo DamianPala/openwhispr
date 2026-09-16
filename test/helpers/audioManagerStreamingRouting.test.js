@@ -128,6 +128,7 @@ test("deepgram/assemblyai byok stream on the key alone, never on the batch path"
   for (const [provider, keyField, model] of [
     ["deepgram", "deepgramApiKey", "nova-3"],
     ["assemblyai", "assemblyaiApiKey", "universal-streaming-english"],
+    ["soniox", "sonioxApiKey", "stt-rt-v5"],
   ]) {
     setSettings({
       cloudTranscriptionProvider: provider,

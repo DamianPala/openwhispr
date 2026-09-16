@@ -389,6 +389,18 @@ const STREAMING_PROVIDERS = {
     onError: (cb) => window.electronAPI.onAssemblyAiError(cb),
     onSessionEnd: (cb) => window.electronAPI.onAssemblyAiSessionEnd(cb),
   },
+  soniox: {
+    warmup: (opts) => window.electronAPI.sonioxStreamingWarmup(opts),
+    start: (opts) => window.electronAPI.sonioxStreamingStart(opts),
+    send: (buf) => window.electronAPI.sonioxStreamingSend(buf),
+    finalize: () => window.electronAPI.sonioxStreamingFinalize(),
+    stop: () => window.electronAPI.sonioxStreamingStop(),
+    status: () => window.electronAPI.sonioxStreamingStatus(),
+    onPartial: (cb) => window.electronAPI.onSonioxPartialTranscript(cb),
+    onFinal: (cb) => window.electronAPI.onSonioxFinalTranscript(cb),
+    onError: (cb) => window.electronAPI.onSonioxError(cb),
+    onSessionEnd: (cb) => window.electronAPI.onSonioxSessionEnd(cb),
+  },
   "openai-realtime": makeDictationRealtimeProvider("openai-realtime"),
   gemini: {
     // The final transcript lands ~500ms after audioStreamEnd (which finalize

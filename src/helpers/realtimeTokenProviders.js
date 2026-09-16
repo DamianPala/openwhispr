@@ -56,6 +56,20 @@ const REALTIME_TOKEN_PROVIDERS = {
     });
   },
 
+  // BYOK-only: Soniox has no managed (OpenWhispr Cloud) tier.
+  "soniox-realtime": async ({ environmentManager }, options, streams) => {
+    if (options.mode !== "byok") {
+      throw new Error("Soniox is available only with your own API key.");
+    }
+    const apiKey = environmentManager.getSonioxKey();
+    if (!apiKey) {
+      const err = new Error("No Soniox API key configured. Add your key in Settings.");
+      err.code = "NO_API";
+      throw err;
+    }
+    return duplicate(streams, apiKey);
+  },
+
   "gemini-realtime": async ({ environmentManager, postServerToken }, options, streams) => {
     if (options.mode === "byok") {
       const apiKey = environmentManager.getGeminiKey();

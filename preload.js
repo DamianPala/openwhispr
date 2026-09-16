@@ -16,6 +16,7 @@ const BYOK_KEY_BRIDGES = [
   { base: "corti", get: "getCortiKey", save: "saveCortiKey" },
   { base: "deepgram", get: "getDeepgramKey", save: "saveDeepgramKey" },
   { base: "assemblyai", get: "getAssemblyAIKey", save: "saveAssemblyAIKey" },
+  { base: "soniox", get: "getSonioxKey", save: "saveSonioxKey" },
   {
     base: "note-formatting-custom",
     get: "getNoteFormattingCustomKey",
@@ -851,6 +852,27 @@ contextBridge.exposeInMainWorld("electronAPI", {
   ),
   onDeepgramSessionEnd: registerListener(
     "deepgram-session-end",
+    (callback) => (_event, data) => callback(data)
+  ),
+
+  // Soniox Streaming
+  sonioxStreamingWarmup: (options) => ipcRenderer.invoke("soniox-streaming-warmup", options),
+  sonioxStreamingStart: (options) => ipcRenderer.invoke("soniox-streaming-start", options),
+  sonioxStreamingSend: (audioBuffer) => ipcRenderer.send("soniox-streaming-send", audioBuffer),
+  sonioxStreamingFinalize: () => ipcRenderer.send("soniox-streaming-finalize"),
+  sonioxStreamingStop: () => ipcRenderer.invoke("soniox-streaming-stop"),
+  sonioxStreamingStatus: () => ipcRenderer.invoke("soniox-streaming-status"),
+  onSonioxPartialTranscript: registerListener(
+    "soniox-partial-transcript",
+    (callback) => (_event, text) => callback(text)
+  ),
+  onSonioxFinalTranscript: registerListener(
+    "soniox-final-transcript",
+    (callback) => (_event, text) => callback(text)
+  ),
+  onSonioxError: registerListener("soniox-error", (callback) => (_event, error) => callback(error)),
+  onSonioxSessionEnd: registerListener(
+    "soniox-session-end",
     (callback) => (_event, data) => callback(data)
   ),
 

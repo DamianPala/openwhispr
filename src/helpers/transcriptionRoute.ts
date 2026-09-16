@@ -49,15 +49,15 @@ const STREAMING_ONLY_PROVIDER_MESSAGE_KEY =
 const PROVIDER_KEY_MISSING_MESSAGE_KEY =
   "hooks.audioRecording.errorDescriptions.providerKeyMissing";
 
-// Deepgram and AssemblyAI have no OpenAI-compatible /audio/transcriptions, so
-// they exist only as realtime providers. A batch/upload/retry request for them
+// Deepgram, AssemblyAI and Soniox have no OpenAI-compatible /audio/transcriptions,
+// so they exist only as realtime providers. A batch/upload/retry request for them
 // has to fail closed: the fall-through at the end of resolveTranscriptionRoute
 // would otherwise POST the user's audio to api.openai.com with their OpenAI key.
 // Hand-maintained rather than derived from the registry: Corti's only model is
 // realtime too, yet it batches through the proxy. Every other "realtime-only"
 // decision (dictationStreamingRouting, audioManager.shouldUseStreaming, the
 // upload picker and selector) derives from this set.
-export const STREAMING_ONLY_PROVIDERS = new Set(["deepgram", "assemblyai"]);
+export const STREAMING_ONLY_PROVIDERS = new Set(["deepgram", "assemblyai", "soniox"]);
 
 export interface TranscriptionRouteSettings {
   transcriptionMode?: string;
@@ -191,7 +191,8 @@ export function resolveByokModel(provider: string, configuredModel?: string): st
       (provider === "gemini" && trimmed.startsWith("gemini-")) ||
       (provider === "deepgram" && (trimmed.startsWith("nova-") || trimmed.startsWith("flux-"))) ||
       (provider === "assemblyai" &&
-        (trimmed.startsWith("universal-") || trimmed.startsWith("slam-")));
+        (trimmed.startsWith("universal-") || trimmed.startsWith("slam-"))) ||
+      (provider === "soniox" && trimmed.startsWith("stt-rt-"));
     if (matchesProvider) return trimmed;
   }
   if (provider === "groq") return "whisper-large-v3-turbo";
@@ -201,6 +202,7 @@ export function resolveByokModel(provider: string, configuredModel?: string): st
   if (provider === "gemini") return "gemini-3.5-transcribe";
   if (provider === "deepgram") return "nova-3";
   if (provider === "assemblyai") return "universal-3-5-pro";
+  if (provider === "soniox") return "stt-rt-v5";
   return "gpt-transcribe";
 }
 

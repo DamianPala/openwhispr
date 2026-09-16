@@ -2112,6 +2112,8 @@ declare global {
       saveDeepgramKey?: (key: string) => Promise<void>;
       getAssemblyAIKey?: () => Promise<string | null>;
       saveAssemblyAIKey?: (key: string) => Promise<void>;
+      getSonioxKey?: () => Promise<string | null>;
+      saveSonioxKey?: (key: string) => Promise<void>;
 
       // Custom endpoint API keys
       getCustomTranscriptionKey?: () => Promise<string | null>;
@@ -2734,6 +2736,43 @@ declare global {
       onDeepgramSessionEnd?: (
         callback: (data: { audioDuration?: number; text?: string }) => void
       ) => () => void;
+
+      // Soniox Streaming (BYOK-only)
+      sonioxStreamingWarmup?: (
+        options?: DictationRealtimeSessionOptions & {
+          secondaryLanguage?: string;
+          region?: string;
+          keepAliveTimeout?: number;
+        }
+      ) => Promise<
+        { success: boolean; alreadyWarm?: boolean; error?: string } & PolicyFailureMetadata
+      >;
+      sonioxStreamingStart?: (
+        options?: DictationRealtimeSessionOptions & {
+          secondaryLanguage?: string;
+          region?: string;
+          keepAliveTimeout?: number;
+        }
+      ) => Promise<
+        { success: boolean; usedWarmConnection?: boolean; error?: string } & PolicyFailureMetadata
+      >;
+      sonioxStreamingSend?: (audioBuffer: ArrayBuffer) => void;
+      sonioxStreamingFinalize?: () => void;
+      sonioxStreamingStop?: () => Promise<{
+        success: boolean;
+        text?: string;
+        model?: string;
+        audioBytesSent?: number;
+        error?: string;
+      }>;
+      sonioxStreamingStatus?: () => Promise<{
+        isConnected: boolean;
+        sessionId: string | null;
+      }>;
+      onSonioxPartialTranscript?: (callback: (text: string) => void) => () => void;
+      onSonioxFinalTranscript?: (callback: (text: string) => void) => () => void;
+      onSonioxError?: (callback: (error: string) => void) => () => void;
+      onSonioxSessionEnd?: (callback: (data: { text?: string }) => void) => () => void;
 
       // Gemini Live Streaming
       geminiStreamingWarmup?: (
