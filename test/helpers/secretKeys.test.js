@@ -72,6 +72,8 @@ test("the STT accessors keep the spellings their callers use", () => {
   assert.equal(typeof env.saveAssemblyAIKey, "function");
   assert.equal(typeof env.getDeepgramKey, "function");
   assert.equal(typeof env.saveDeepgramKey, "function");
+  assert.equal(typeof env.getSonioxKey, "function");
+  assert.equal(typeof env.saveSonioxKey, "function");
 });
 
 test("preload BYOK_KEY_BRIDGES mirror the manifest exactly", () => {

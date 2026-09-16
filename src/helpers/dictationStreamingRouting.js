@@ -154,5 +154,12 @@ export function buildStreamingSessionOptions({
       options.baseUrl = settings.remoteTranscriptionUrl || settings.cloudTranscriptionBaseUrl;
     }
   }
+  if (providerName === "soniox") {
+    // Hints are meaningless on auto: only send a secondary language when a
+    // concrete preferred language was resolved.
+    if (options.language) options.secondaryLanguage = settings.sonioxSecondaryLanguage || undefined;
+    options.region = settings.sonioxRegion || "us";
+    options.keepAliveTimeout = settings.sonioxKeepAliveTimeout || 0;
+  }
   return options;
 }

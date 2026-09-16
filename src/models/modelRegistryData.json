@@ -419,6 +419,20 @@
           "streaming": true
         }
       ]
+    },
+    {
+      "id": "soniox",
+      "name": "Soniox",
+      "baseUrl": "wss://stt-rt.soniox.com",
+      "models": [
+        {
+          "id": "stt-rt-v5",
+          "name": "Soniox STT RT v5",
+          "description": "Realtime streaming speech-to-text, 60+ languages",
+          "descriptionKey": "models.descriptions.transcription.soniox_stt_rt_v5",
+          "streaming": true
+        }
+      ]
     }
   ],
   "cloudProviders": [

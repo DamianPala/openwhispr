@@ -19,6 +19,7 @@ const loadMeeting = () => import("../../src/helpers/meetingStreamingProviders.js
 const RENDERER_STREAMING_PROVIDERS = [
   "deepgram",
   "assemblyai",
+  "soniox",
   "openai-realtime",
   "gemini",
   "corti",
@@ -110,6 +111,22 @@ const RESOLUTION_MATRIX = [
     "assemblyai",
   ],
   [
+    "soniox byok streams over soniox's own channels",
+    {
+      settings: settingsWith({
+        cloudTranscriptionProvider: "soniox",
+        cloudTranscriptionModel: "stt-rt-v5",
+        cloudTranscriptionMode: "byok",
+      }),
+    },
+    "soniox",
+  ],
+  [
+    "soniox on openwhispr cloud stays on the managed path (BYOK-only provider)",
+    { settings: settingsWith({ cloudTranscriptionProvider: "soniox" }) },
+    "openai-realtime",
+  ],
+  [
     "a stale OpenAI realtime model cannot hijack a byok streaming-only provider",
     {
       settings: settingsWith({
@@ -119,6 +136,17 @@ const RESOLUTION_MATRIX = [
       }),
     },
     "deepgram",
+  ],
+  [
+    "a stale OpenAI realtime model cannot hijack soniox either",
+    {
+      settings: settingsWith({
+        cloudTranscriptionProvider: "soniox",
+        cloudTranscriptionModel: "gpt-4o-mini-transcribe",
+        cloudTranscriptionMode: "byok",
+      }),
+    },
+    "soniox",
   ],
   [
     "deepgram on openwhispr cloud stays on the managed path",
@@ -246,6 +274,39 @@ test("options: corti carries environment and tenant; auto language is omitted", 
   assert.equal(options.environment, "eu");
   assert.equal(options.tenant, "acme");
   assert.equal(options.language, undefined);
+});
+
+test("options: soniox carries region/keepAliveTimeout and secondary language only when a language is resolved", async () => {
+  const { buildStreamingSessionOptions } = await loadRouting();
+  const sonioxSettings = settingsWith({
+    cloudTranscriptionProvider: "soniox",
+    cloudTranscriptionMode: "byok",
+    cloudTranscriptionModel: "stt-rt-v5",
+    sonioxSecondaryLanguage: "pl",
+    sonioxRegion: "eu",
+    sonioxKeepAliveTimeout: 60,
+  });
+
+  const withLanguage = buildStreamingSessionOptions({
+    providerName: "soniox",
+    settings: sonioxSettings,
+    language: "en",
+    keyterms: ["Qdrant"],
+  });
+  assert.equal(withLanguage.secondaryLanguage, "pl");
+  assert.equal(withLanguage.region, "eu");
+  assert.equal(withLanguage.keepAliveTimeout, 60);
+
+  const withoutLanguage = buildStreamingSessionOptions({
+    providerName: "soniox",
+    settings: sonioxSettings,
+    language: "auto",
+    keyterms: [],
+  });
+  assert.equal(withoutLanguage.language, undefined);
+  assert.equal(withoutLanguage.secondaryLanguage, undefined, "hints are meaningless on auto");
+  assert.equal(withoutLanguage.region, "eu");
+  assert.equal(withoutLanguage.keepAliveTimeout, 60);
 });
 
 test("options: provider is stamped for every renderer channel binding", async () => {

@@ -329,6 +329,7 @@ const NUMERIC_SETTINGS = new Set([
   "micWarmHoldSeconds",
   "audioRetentionDays",
   "transcriptRetentionDays",
+  "sonioxKeepAliveTimeout",
   "whisperVadThreshold",
   "whisperVadMinSpeechDurationMs",
   "whisperVadMinSilenceDurationMs",
@@ -1141,6 +1142,7 @@ export interface SettingsState
   setTinfoilApiKey: (key: string) => void;
   setDeepgramApiKey: (key: string) => void;
   setAssemblyaiApiKey: (key: string) => void;
+  setSonioxApiKey: (key: string) => void;
   setCustomTranscriptionApiKey: (key: string) => void;
   setCleanupCustomApiKey: (key: string) => void;
 
@@ -1149,6 +1151,14 @@ export interface SettingsState
   cortiTenant: string;
   setCortiEnvironment: (value: string) => void;
   setCortiTenant: (value: string) => void;
+
+  // Soniox (BYOK)
+  sonioxSecondaryLanguage: string;
+  sonioxRegion: string;
+  sonioxKeepAliveTimeout: number;
+  setSonioxSecondaryLanguage: (value: string) => void;
+  setSonioxRegion: (value: string) => void;
+  setSonioxKeepAliveTimeout: (value: number) => void;
 
   // Enterprise providers
   enterpriseSetupMode: EnterpriseSetupMode;
@@ -1383,6 +1393,7 @@ const SECRET_IPC_SAVERS = {
   tinfoil: "saveTinfoilKey",
   deepgram: "saveDeepgramKey",
   assemblyai: "saveAssemblyAIKey",
+  soniox: "saveSonioxKey",
   customTranscription: "saveCustomTranscriptionKey",
   cleanupCustom: "saveCleanupCustomKey",
   noteFormattingCustom: "saveNoteFormattingCustomKey",
@@ -1433,6 +1444,7 @@ const STALE_SECRET_LOCALSTORAGE_KEYS = [
   "tinfoilApiKey",
   "deepgramApiKey",
   "assemblyaiApiKey",
+  "sonioxApiKey",
   "customTranscriptionApiKey",
   "customReasoningApiKey",
   "cleanupCustomApiKey",
@@ -1530,6 +1542,9 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   cleanupCloudBaseUrl: readString("cleanupCloudBaseUrl", API_ENDPOINTS.OPENAI_BASE),
   cortiEnvironment: readString("cortiEnvironment", "us"),
   cortiTenant: readString("cortiTenant", "base"),
+  sonioxSecondaryLanguage: readString("sonioxSecondaryLanguage", ""),
+  sonioxRegion: readString("sonioxRegion", "us"),
+  sonioxKeepAliveTimeout: readNumber("sonioxKeepAliveTimeout", 0),
   customDictionary: readStringArray("customDictionary", []),
   snippets: (() => {
     try {
@@ -1561,6 +1576,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   tinfoilApiKey: "",
   deepgramApiKey: "",
   assemblyaiApiKey: "",
+  sonioxApiKey: "",
   customTranscriptionApiKey: "",
   cleanupCustomApiKey: "",
 
@@ -2209,6 +2225,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   // STT-only, so there is no ReasoningService key cache to invalidate.
   setDeepgramApiKey: createSecretSetter("deepgramApiKey", "deepgram"),
   setAssemblyaiApiKey: createSecretSetter("assemblyaiApiKey", "assemblyai"),
+  setSonioxApiKey: createSecretSetter("sonioxApiKey", "soniox"),
+  setSonioxSecondaryLanguage: createStringSetter("sonioxSecondaryLanguage"),
+  setSonioxRegion: createStringSetter("sonioxRegion"),
+  setSonioxKeepAliveTimeout: createNumberSetter("sonioxKeepAliveTimeout"),
   setCustomTranscriptionApiKey: (key: string) => {
     set({ customTranscriptionApiKey: key });
     debouncedSaveSecret("customTranscription", key);
@@ -2708,6 +2728,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     if (keys.tinfoilApiKey !== undefined) s.setTinfoilApiKey(keys.tinfoilApiKey);
     if (keys.deepgramApiKey !== undefined) s.setDeepgramApiKey(keys.deepgramApiKey);
     if (keys.assemblyaiApiKey !== undefined) s.setAssemblyaiApiKey(keys.assemblyaiApiKey);
+    if (keys.sonioxApiKey !== undefined) s.setSonioxApiKey(keys.sonioxApiKey);
     if (keys.customTranscriptionApiKey !== undefined)
       s.setCustomTranscriptionApiKey(keys.customTranscriptionApiKey);
     if (keys.cleanupCustomApiKey !== undefined) s.setCleanupCustomApiKey(keys.cleanupCustomApiKey);
@@ -3357,6 +3378,7 @@ export async function initializeSettings(): Promise<void> {
         vertexApiKey,
         deepgram,
         assemblyai,
+        soniox,
       ] = await Promise.all([
         window.electronAPI.getOpenAIKey?.(),
         window.electronAPI.getAnthropicKey?.(),
@@ -3383,6 +3405,7 @@ export async function initializeSettings(): Promise<void> {
         window.electronAPI.getVertexApiKey?.(),
         window.electronAPI.getDeepgramKey?.(),
         window.electronAPI.getAssemblyAIKey?.(),
+        window.electronAPI.getSonioxKey?.(),
       ]);
 
       useSettingsStore.setState({
@@ -3417,6 +3440,7 @@ export async function initializeSettings(): Promise<void> {
         vertexApiKey: vertexApiKey || "",
         deepgramApiKey: deepgram || "",
         assemblyaiApiKey: assemblyai || "",
+        sonioxApiKey: soniox || "",
       });
 
       if (localStorage.getItem("_dictationAgentSeeded") === "key-pending") {

@@ -16,6 +16,7 @@ const deps = (overrides = {}) => ({
     getDeepgramKey: () => "dg-key",
     getAssemblyAIKey: () => "aai-key",
     getGeminiKey: () => "gm-key",
+    getSonioxKey: () => "sx-key",
     ...overrides.environmentManager,
   },
   proxyFetch: overrides.proxyFetch || (async () => jsonResponse(200, { token: "aai-token" })),
@@ -133,6 +134,27 @@ test("deepgram byok duplicates the key; cloud mints per stream", async () => {
       { streams: 2 }
     ),
     ["dg-1", "dg-2"]
+  );
+});
+
+test("soniox byok duplicates the key; missing key and non-byok mode fail closed", async () => {
+  const { fetchRealtimeTokenForProvider } = await load();
+  assert.deepEqual(
+    await fetchRealtimeTokenForProvider("soniox-realtime", deps(), { mode: "byok" }, {
+      streams: 2,
+    }),
+    ["sx-key", "sx-key"]
+  );
+
+  const noKey = deps({ environmentManager: { getSonioxKey: () => "" } });
+  await assert.rejects(
+    fetchRealtimeTokenForProvider("soniox-realtime", noKey, { mode: "byok" }),
+    (err) => err.code === "NO_API"
+  );
+
+  await assert.rejects(
+    fetchRealtimeTokenForProvider("soniox-realtime", deps(), { mode: "openwhispr" }),
+    /available only with your own API key/
   );
 });
 
