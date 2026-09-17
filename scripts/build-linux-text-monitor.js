@@ -4,10 +4,10 @@
  *
  * Strategy:
  * 1. If binary exists and is up-to-date, do nothing
- * 2. Try to download prebuilt binary from GitHub releases
- * 3. Fall back to local compilation if download fails
+ * 2. Compile locally when the AT-SPI2 dev headers are present
+ * 3. Fall back to the prebuilt binary from GitHub releases
  *
- * This allows developers without AT-SPI2 dev headers to still build the app.
+ * The download keeps builds working for developers without AT-SPI2 dev headers.
  */
 
 const { spawnSync } = require("child_process");
@@ -190,13 +190,15 @@ async function main() {
     return;
   }
 
-  const downloaded = await tryDownload();
-  if (downloaded) {
+  // The prebuilt release lags this checkout's source; compile whenever the
+  // toolchain is present so local fixes actually ship.
+  const compiled = tryCompile();
+  if (compiled) {
     return;
   }
 
-  const compiled = tryCompile();
-  if (compiled) {
+  const downloaded = await tryDownload();
+  if (downloaded) {
     return;
   }
 
