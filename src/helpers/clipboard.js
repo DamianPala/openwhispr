@@ -601,6 +601,35 @@ class ClipboardManager {
     });
   }
 
+  // kdotool only; resolves null when it is missing or fails so the caller can
+  // drop to the synchronous probe with its KWin-script fallback.
+  async _detectKdeWindowClassAsync() {
+    if (!this.commandExists("kdotool")) return null;
+    const run = (args) =>
+      new Promise((resolve) => {
+        let stdout = "";
+        let proc;
+        try {
+          proc = spawn("kdotool", args, { stdio: ["ignore", "pipe", "ignore"] });
+        } catch {
+          return resolve(null);
+        }
+        const timer = setTimeout(() => killProcess(proc, "SIGKILL"), 1000);
+        proc.stdout.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        proc.on("error", () => resolve(null));
+        proc.on("close", (code) => {
+          clearTimeout(timer);
+          resolve(code === 0 ? stdout.trim() : null);
+        });
+      });
+    const winId = await run(["getactivewindow"]);
+    if (!winId) return null;
+    const cls = await run(["getwindowclassname", winId]);
+    return cls ? cls.toLowerCase() : null;
+  }
+
   _detectKdeWindowClass() {
     if (this.commandExists("kdotool")) {
       try {
@@ -910,6 +939,11 @@ class ClipboardManager {
     const allowClipboardFallback = options.allowClipboardFallback === true;
 
     try {
+      // Runs alongside the clipboard save/write below instead of after them.
+      const kdeWindowClass =
+        platform === "linux" && getLinuxSessionInfo().isKde
+          ? this._detectKdeWindowClassAsync()
+          : null;
       const shouldRestore = options.restoreClipboard !== false;
       const originalClipboard = shouldRestore ? this._saveClipboard() : null;
       const originalPrimary =
@@ -980,6 +1014,7 @@ class ClipboardManager {
           ...options,
           originalPrimary,
           expectedClipboardText: text,
+          kdeWindowClass,
         });
         method = pasteResult?.method || "linux-tools";
       }
@@ -1561,7 +1596,8 @@ class ClipboardManager {
     let detectedWindowClass = preDetectWindowClass(targetWindowId);
 
     if (!detectedWindowClass && isKde) {
-      detectedWindowClass = this._detectKdeWindowClass();
+      detectedWindowClass =
+        (await options.kdeWindowClass?.catch?.(() => null)) || this._detectKdeWindowClass();
       if (detectedWindowClass) {
         debugLogger.debug("KDE window class detected", { detectedWindowClass }, "clipboard");
       }
