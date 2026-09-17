@@ -171,6 +171,13 @@ describe("removeFillers", () => {
     assert.equal(removeFillers("umówiłem się, um, na jutro"), "umówiłem się na jutro");
   });
 
+  it("keeps a quoted filler, which names the sound rather than hesitating", () => {
+    assert.equal(removeFillers('dużo "yyy", dużo "hmm".'), 'dużo "yyy", dużo "hmm".');
+    assert.equal(removeFillers("mówi „eee” i „yyy”"), "mówi „eee” i „yyy”");
+    assert.equal(removeFillers('He said "um, I think so."'), 'He said "um, I think so."');
+    assert.equal(removeFillers('I "think", um, so'), 'I "think" so');
+  });
+
   // Punctuation is not orphaned when a filler is removed
 
   it("does not orphan punctuation after removing a filler", () => {

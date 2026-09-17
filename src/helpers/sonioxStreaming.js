@@ -75,12 +75,15 @@ const SENTENCE_END = ".!?";
 // Hyphens are excluded on both sides so "uh-huh" and "uh-oh" — words, not
 // hesitation — survive. The guards spell out Unicode letters because \w is
 // ASCII-only in JS even with the u flag, and "umówmy" or "tłum" would be
-// cut at the ó / ł. The trailing class absorbs whatever punctuation the
-// speaker's pause collected; replaceFiller decides what to give back.
+// cut at the ó / ł. A quote touching the filler also blocks the match: when
+// the model wraps "yyy" in quotes the speaker was naming the sound, not
+// hesitating. The trailing class absorbs whatever punctuation the speaker's
+// pause collected; replaceFiller decides what to give back.
 // Horizontal whitespace only ([^\S\n]): a bare \s* would swallow the
 // newlines around a filler and silently merge the speaker's paragraphs.
+const WORD_OR_QUOTE = "\\p{L}\\p{N}_\"'„“”‘’«»-";
 const FILLER_RE = new RegExp(
-  `[^\\S\\n]*,?[^\\S\\n]*(?<![\\p{L}\\p{N}_-])${FILLER_WORD}(?![\\p{L}\\p{N}_-])[,.!?;:…]*[^\\S\\n]*`,
+  `[^\\S\\n]*,?[^\\S\\n]*(?<![${WORD_OR_QUOTE}])${FILLER_WORD}(?![${WORD_OR_QUOTE}])[,.!?;:…]*[^\\S\\n]*`,
   "giu"
 );
 // Marks each point where a filler was removed, so capitalisation is applied
