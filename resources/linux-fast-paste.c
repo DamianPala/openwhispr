@@ -131,13 +131,10 @@ static void portal_send_paste(PortalData *app)
         ok &= portal_emit_key(app, PK_CTRL, 0, "Ctrl release");
     } else if (app->mode == PASTE_MODE_SHIFT_INSERT) {
         ok &= portal_emit_key(app, PK_SHIFT, 1, "Shift press");
-        /* Ordering is already guaranteed: each notify is a synchronous D-Bus
-         * call and the portal forwards them over one ordered Wayland
-         * connection, where KWin stamps each key on arrival. The pauses are
-         * only a hold margin for the receiving toolkit, not a compositor need. */
-        usleep(5000);
+        /* let the compositor register the modifier before the key arrives */
+        usleep(20000);
         ok &= portal_emit_key(app, PK_INSERT, 1, "Insert press");
-        usleep(5000);
+        usleep(20000);
         ok &= portal_emit_key(app, PK_INSERT, 0, "Insert release");
         ok &= portal_emit_key(app, PK_SHIFT, 0, "Shift release");
     } else {
