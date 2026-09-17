@@ -4618,7 +4618,12 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       this.isRecording = true;
       this.recordingStartTime = Date.now();
       this.onStateChange?.({ isRecording: true, isProcessing: false, isStreaming: true });
-      await this.beginMicRecovery(stream);
+      // Arming recovery enumerates devices (40–90 ms measured). Nothing on the
+      // start path needs it armed, and a stop landing meanwhile is safe: the
+      // controller's own stop() makes the in-flight start bail out.
+      this.beginMicRecovery(stream).catch((error) => {
+        logger.warn("Mic recovery arm failed", { error: error?.message }, "audio");
+      });
 
       // 4. Connect WebSocket — audio is already flowing from the pipeline above,
       //    so Deepgram receives data immediately (no idle timeout).
