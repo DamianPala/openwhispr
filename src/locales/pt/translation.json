@@ -854,10 +854,10 @@
         "description": "Mantém a conexão ativa entre gravações para um início instantâneo, com custo adicional.",
         "options": {
           "0": "Desativado",
-          "30": "30 segundos",
-          "60": "1 minuto",
-          "120": "2 minutos",
-          "300": "5 minutos"
+          "30": "30 segundos (+50–100% de custo)",
+          "60": "1 minuto (+100–150% de custo)",
+          "120": "2 minutos (+100–200% de custo)",
+          "300": "5 minutos (+200–300% de custo)"
         }
       }
     },

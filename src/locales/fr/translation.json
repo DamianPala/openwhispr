@@ -875,10 +875,10 @@
         "description": "Maintient la connexion active entre les enregistrements pour un démarrage instantané, moyennant un coût supplémentaire.",
         "options": {
           "0": "Désactivé",
-          "30": "30 secondes",
-          "60": "1 minute",
-          "120": "2 minutes",
-          "300": "5 minutes"
+          "30": "30 secondes (+50–100 % de coût)",
+          "60": "1 minute (+100–150 % de coût)",
+          "120": "2 minutes (+100–200 % de coût)",
+          "300": "5 minutes (+200–300 % de coût)"
         }
       }
     },

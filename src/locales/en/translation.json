@@ -875,10 +875,10 @@
         "description": "Keeps the connection warm between recordings for an instant start, at extra cost.",
         "options": {
           "0": "Off",
-          "30": "30 seconds",
-          "60": "1 minute",
-          "120": "2 minutes",
-          "300": "5 minutes"
+          "30": "30 seconds (+50–100% cost)",
+          "60": "1 minute (+100–150% cost)",
+          "120": "2 minutes (+100–200% cost)",
+          "300": "5 minutes (+200–300% cost)"
         }
       }
     },

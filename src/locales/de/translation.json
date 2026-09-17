@@ -875,10 +875,10 @@
         "description": "Hält die Verbindung zwischen Aufnahmen aufrecht für einen sofortigen Start, gegen Aufpreis.",
         "options": {
           "0": "Aus",
-          "30": "30 Sekunden",
-          "60": "1 Minute",
-          "120": "2 Minuten",
-          "300": "5 Minuten"
+          "30": "30 Sekunden (+50–100 % Kosten)",
+          "60": "1 Minute (+100–150 % Kosten)",
+          "120": "2 Minuten (+100–200 % Kosten)",
+          "300": "5 Minuten (+200–300 % Kosten)"
         }
       }
     },

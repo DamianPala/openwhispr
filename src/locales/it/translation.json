@@ -875,10 +875,10 @@
         "description": "Mantiene attiva la connessione tra le registrazioni per un avvio istantaneo, con un costo aggiuntivo.",
         "options": {
           "0": "Disattivato",
-          "30": "30 secondi",
-          "60": "1 minuto",
-          "120": "2 minuti",
-          "300": "5 minuti"
+          "30": "30 secondi (+50–100% di costo)",
+          "60": "1 minuto (+100–150% di costo)",
+          "120": "2 minuti (+100–200% di costo)",
+          "300": "5 minuti (+200–300% di costo)"
         }
       }
     },
