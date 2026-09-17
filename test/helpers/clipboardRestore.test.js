@@ -595,10 +595,27 @@ test("KDE tries portal before uinput", async () => {
   assert.deepEqual(
     spawnCalls.map((call) => call.args),
     [
-      ["--portal", "--shift-insert"],
+      ["--portal", "--keycodes", "--shift-insert"],
       ["--uinput", "--shift-insert"],
     ]
   );
+});
+
+test("KDE portal sends Shift+Insert keycodes even for a classified GUI window", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSuccessfulSpawn(spawnCalls),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => false;
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._readPortalToken = () => null;
+  manager._detectKdeWindowClass = () => "firefox";
+
+  const result = await withWaylandEnvironment("KDE", () => manager.pasteLinux(null));
+
+  assert.equal(result.method, "portal");
+  assert.deepEqual(spawnCalls[0].args, ["--portal", "--keycodes", "--shift-insert"]);
 });
 
 test("portal exit zero succeeds with or without a restore token", async () => {

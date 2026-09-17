@@ -500,9 +500,13 @@ class ClipboardManager {
     }
   }
 
-  _runPortalPaste(fastPasteBinary, { shiftInsert = false, terminal = false, copy = false } = {}) {
+  _runPortalPaste(
+    fastPasteBinary,
+    { shiftInsert = false, terminal = false, copy = false, keycodes = false } = {}
+  ) {
     return new Promise((resolve, reject) => {
       const args = ["--portal"];
+      if (keycodes) args.push("--keycodes");
       if (copy) args.push("--copy");
       if (shiftInsert) args.push("--shift-insert");
       else if (terminal) args.push("--terminal");
@@ -1697,8 +1701,14 @@ class ClipboardManager {
 
         const tryPortalPaste = async () => {
           try {
+            // KWin's fake-input path resets the modifier state around every
+            // keysym event, so a keysym Ctrl+V lands as a bare "v" (Plasma 6.x,
+            // kwin src/backends/fakeinput/fakeinputbackend.cpp). KDE therefore
+            // gets evdev keycodes, and Shift+Insert because Insert's keycode is
+            // the same on every layout while KEY_V is not.
             await this._runPortalPaste(linuxFastPaste, {
-              shiftInsert: useShiftInsert,
+              keycodes: isKde,
+              shiftInsert: useShiftInsert || isKde,
               terminal: isTerminalTarget,
             });
             this.safeLog("✅ Paste successful using linux-fast-paste --portal (RemoteDesktop)");

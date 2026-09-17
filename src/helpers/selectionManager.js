@@ -461,6 +461,8 @@ class SelectionManager {
             await this.clipboardManager._runPortalPaste(binary, {
               copy: true,
               terminal: isTerminal,
+              // KWin drops modifiers from keysym events; see the paste path.
+              keycodes: getLinuxSessionInfo().isKde,
             });
             return { success: true, target };
           } catch (err) {
