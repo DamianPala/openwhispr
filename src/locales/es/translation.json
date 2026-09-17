@@ -862,6 +862,12 @@
     },
     "soniox": {
       "region": "Región de datos",
+      "regions": {
+        "us": "Estados Unidos",
+        "eu": "Unión Europea",
+        "jp": "Japón",
+        "in": "India"
+      },
       "secondaryLanguage": "Idioma secundario",
       "secondaryLanguageNone": "Ninguno",
       "keepAlive": {

@@ -3656,6 +3656,12 @@
     },
     "soniox": {
       "region": "منطقة البيانات",
+      "regions": {
+        "us": "الولايات المتحدة",
+        "eu": "الاتحاد الأوروبي",
+        "jp": "اليابان",
+        "in": "الهند"
+      },
       "secondaryLanguage": "اللغة الثانوية",
       "secondaryLanguageNone": "بدون",
       "keepAlive": {
