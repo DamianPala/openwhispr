@@ -482,7 +482,7 @@ jobs:
           OpenWhispr $VERSION with the Soniox realtime provider (bring your own key). Built from \`${GITHUB_SHA}\`.
 
           These builds are not code-signed:
-          - **Windows** (\`OpenWhispr Setup $VERSION.exe\`): SmartScreen will warn; choose *More info* → *Run anyway*.
+          - **Windows** (\`OpenWhispr.Setup.$VERSION.exe\`, GitHub replaces the spaces in the installer's name): SmartScreen will warn; choose *More info* → *Run anyway*.
           - **macOS** (\`OpenWhispr-$VERSION-arm64.dmg\` for Apple Silicon, \`OpenWhispr-$VERSION.dmg\` for Intel): after copying the app, run \`xattr -d com.apple.quarantine /Applications/OpenWhispr.app\` once.
           - **Linux**: AppImage (any distro) or .deb (Debian/Ubuntu).
 
