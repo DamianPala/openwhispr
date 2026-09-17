@@ -277,7 +277,7 @@
   },
   "publish": {
     "provider": "github",
-    "owner": "OpenWhispr",
+    "owner": "DamianPala",
     "repo": "openwhispr",
     "private": false,
     "releaseType": "draft"

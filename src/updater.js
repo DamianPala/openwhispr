@@ -31,9 +31,11 @@ class UpdateManager {
       return;
     }
 
+    // This fork's own releases: pointing at OpenWhispr/openwhispr would replace
+    // the app with an upstream build that has no Soniox provider.
     autoUpdater.setFeedURL({
       provider: "github",
-      owner: "OpenWhispr",
+      owner: "DamianPala",
       repo: "openwhispr",
       private: false,
     });
