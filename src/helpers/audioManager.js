@@ -378,6 +378,7 @@ const isValidApiKey = (key, provider = "openai") => {
 // Corti), so the transcript tail lands whenever it lands — wait, don't sleep.
 const STREAMING_FINAL_QUIET_MS = 250;
 const STREAMING_FINAL_CEILING_MS = 2000;
+const STREAMING_FLUSH_CEILING_MS = 120;
 
 // Both realtime providers share the dictation realtime IPC surface and differ
 // only in the token-provider id. Forcing `provider` here (even though
@@ -4760,6 +4761,9 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         // The worklet posts its remaining PCM followed by a "flushed" sentinel
         // on stop; the sentinel must not be sent as audio (realtime backends
         // reject the odd-length non-PCM bytes with "Invalid audio data").
+        // Port messages and ipcRenderer.send are both ordered, so by the time
+        // the sentinel lands every PCM frame is already ahead of the finalize
+        // the stop path sends next.
         if (!ownsSession() || !this.isStreaming) return;
         if (event.data === "flushed") {
           this._streamingFlushResolve?.();
@@ -5215,6 +5219,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     let finalText = this.streamingFinalText || "";
 
     const provider = this.getStreamingProvider();
+    let flushed = Promise.resolve();
     let acknowledgedFinal = null;
     let finalAcknowledged = false;
     let orukeetFinal = null;
@@ -5249,6 +5254,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         error: error.message,
       }));
     } else if (this.streamingProcessor) {
+      // 1. Stop the processor — it flushes its remaining buffer on "stop".
+      //    Keep isStreaming TRUE so the port.onmessage handler forwards the flush to WebSocket.
+      flushed = new Promise((resolve) => {
+        this._streamingFlushResolve = resolve;
+      });
       try {
         this.streamingProcessor.port.postMessage("stop");
         this.streamingProcessor.disconnect();
@@ -5297,9 +5307,17 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     }
     const tAudioCleanup = performance.now();
 
-    // 2. Wait for flushed buffer to travel: port -> main thread -> IPC -> WebSocket -> server.
-    //    Then mark streaming done so no further audio is forwarded.
-    if (!provider.finalizeAcknowledged) await new Promise((resolve) => setTimeout(resolve, 120));
+    // 2. Wait for the worklet's "flushed" sentinel, which trails its last PCM
+    //    frame; the timer only covers a port that never answers (torn-down
+    //    context). Then mark streaming done so no further audio is forwarded.
+    //    An acknowledged finalize already awaited the sentinel above.
+    if (!provider.finalizeAcknowledged) {
+      await Promise.race([
+        flushed,
+        new Promise((resolve) => setTimeout(resolve, STREAMING_FLUSH_CEILING_MS)),
+      ]);
+      this._streamingFlushResolve = null;
+    }
     if (wasCancelled()) return abandonFinalization();
     this.isStreaming = false;
     const tFlush = performance.now();
