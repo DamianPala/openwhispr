@@ -716,7 +716,7 @@ static int paste_via_uinput(paste_mode_t mode, int copy_mode) {
  * Ctrl still held from the dictation hotkey turns the injected Shift+Insert
  * into Ctrl+Shift+Insert, which no target treats as paste. Polls the physical
  * keyboards' key state (EVIOCGKEY) until every modifier is up.
- * stdout: "released <ms>" (exit 0), "timeout <ms> <held>" (exit 2),
+ * stdout: "released <ms> [<held at start>]" (exit 0), "timeout <ms> <held>" (exit 2),
  * "no-devices" (exit 3, no readable keyboard: not in the input group). */
 static const struct { int code; const char *name; } MODIFIER_KEYS[] = {
     { KEY_LEFTCTRL, "ctrl" },  { KEY_RIGHTCTRL, "ctrl" },
@@ -793,6 +793,7 @@ static int wait_modifiers_released(long timeout_ms) {
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
     int result;
+    char first_held[64] = "";
     for (;;) {
         char held[64] = "";
         for (int i = 0; i < count; i++) {
@@ -807,8 +808,10 @@ static int wait_modifiers_released(long timeout_ms) {
             }
         }
         long elapsed = elapsed_ms(&start);
+        if (held[0] && !first_held[0]) strcpy(first_held, held);
         if (!held[0]) {
-            printf("released %ld\n", elapsed);
+            /* what was held when we started, so the log shows the culprit */
+            printf(first_held[0] ? "released %ld %s\n" : "released %ld\n", elapsed, first_held);
             result = 0;
             break;
         }
@@ -1011,8 +1014,14 @@ int main(int argc, char *argv[]) {
     long wait_modifiers_ms = -1;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--wait-modifiers") == 0 && i + 1 < argc) {
-            wait_modifiers_ms = strtol(argv[++i], NULL, 10);
+        if (strcmp(argv[i], "--wait-modifiers") == 0) {
+            /* A read-only query must never fall through to an injection. */
+            char *end = NULL;
+            if (i + 1 < argc) wait_modifiers_ms = strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || wait_modifiers_ms < 0) {
+                fprintf(stderr, "usage: --wait-modifiers <timeout-ms>\n");
+                return 5;
+            }
         } else if (strcmp(argv[i], "--terminal") == 0) {
             force_terminal = 1;
         } else if (strcmp(argv[i], "--shift-insert") == 0) {
