@@ -580,6 +580,46 @@ test("GNOME does not retry a failed ydotool after the native paths also fail", a
   );
 });
 
+test("Linux waits for the physical modifiers to be released before injecting keys", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [0, 0], { stdout: ["released 180\n"] }),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._fastPasteHasCapability = (_binary, capability) => capability === "wait-modifiers-v1";
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+
+  const result = await withWaylandEnvironment("KDE", () => manager.pasteLinux(null));
+
+  assert.equal(result.method, "ydotool");
+  assert.deepEqual(spawnCalls, [
+    { command: "/tmp/linux-fast-paste", args: ["--wait-modifiers", "1000"] },
+    { command: "ydotool", args: ["key", "42:1", "110:1", "110:0", "42:0"] },
+  ]);
+});
+
+test("Linux pastes anyway when the modifier wait times out", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [2, 0], { stdout: ["timeout 1000 ctrl\n"] }),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._fastPasteHasCapability = () => true;
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+
+  const result = await withWaylandEnvironment("KDE", () => manager.pasteLinux(null));
+
+  assert.equal(result.method, "ydotool");
+  assert.equal(spawnCalls.length, 2);
+  assert.equal(spawnCalls[1].command, "ydotool");
+});
+
 test("KDE pastes through a running ydotoold before the portal", async () => {
   const spawnCalls = [];
   const TestClipboardManager = loadClipboardManager({

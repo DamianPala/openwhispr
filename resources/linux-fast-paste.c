@@ -17,6 +17,8 @@
 #include <linux/input.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <dirent.h>
+#include <time.h>
 #endif
 
 #ifdef HAVE_ATSPI
@@ -709,6 +711,134 @@ static int paste_via_uinput(paste_mode_t mode, int copy_mode) {
     close(fd);
     return 0;
 }
+
+/* --wait-modifiers: the compositor merges modifier state across keyboards, so a
+ * Ctrl still held from the dictation hotkey turns the injected Shift+Insert
+ * into Ctrl+Shift+Insert, which no target treats as paste. Polls the physical
+ * keyboards' key state (EVIOCGKEY) until every modifier is up.
+ * stdout: "released <ms>" (exit 0), "timeout <ms> <held>" (exit 2),
+ * "no-devices" (exit 3, no readable keyboard: not in the input group). */
+static const struct { int code; const char *name; } MODIFIER_KEYS[] = {
+    { KEY_LEFTCTRL, "ctrl" },  { KEY_RIGHTCTRL, "ctrl" },
+    { KEY_LEFTALT, "alt" },    { KEY_RIGHTALT, "alt" },
+    { KEY_LEFTMETA, "meta" },  { KEY_RIGHTMETA, "meta" },
+    { KEY_LEFTSHIFT, "shift" }, { KEY_RIGHTSHIFT, "shift" },
+};
+#define MODIFIER_KEY_COUNT (sizeof(MODIFIER_KEYS) / sizeof(MODIFIER_KEYS[0]))
+#define MAX_KEYBOARDS 32
+
+static int evdev_bit(const unsigned char *bits, int bit) {
+    return (bits[bit / 8] >> (bit % 8)) & 1;
+}
+
+static int read_sysfs_line(const char *path, char *buf, size_t size) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    int ok = fgets(buf, (int)size, f) != NULL;
+    fclose(f);
+    if (ok) buf[strcspn(buf, "\n")] = '\0';
+    return ok;
+}
+
+/* Keyboards only, minus the virtual ones we and ydotoold create: their state
+ * is what we are about to inject, not what the user holds. Classified from
+ * sysfs before the node is opened: opening and closing an evdev node costs
+ * 10-20 ms for some devices (HDMI jacks, receivers), and there are dozens. */
+static int is_physical_keyboard(const char *event_name) {
+    char path[300];
+    char line[512];
+    snprintf(path, sizeof(path), "/sys/class/input/%s/device/name", event_name);
+    if (!read_sysfs_line(path, line, sizeof(line))) return 0;
+    if (strcasestr(line, "ydotool") || strcasestr(line, "openwhispr")) return 0;
+    snprintf(path, sizeof(path), "/sys/class/input/%s/device/capabilities/key", event_name);
+    if (!read_sysfs_line(path, line, sizeof(line))) return 0;
+    /* space-separated hex words, most significant first; bit 29 (KEY_LEFTCTRL)
+     * lives in the last word */
+    const char *last = strrchr(line, ' ');
+    unsigned long long low = strtoull(last ? last + 1 : line, NULL, 16);
+    return (low >> KEY_LEFTCTRL) & 1ULL;
+}
+
+static int open_physical_keyboards(int *fds, int max) {
+    DIR *dir = opendir("/dev/input");
+    if (!dir) return 0;
+    int count = 0;
+    struct dirent *entry;
+    while (count < max && (entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "event", 5) != 0) continue;
+        if (!is_physical_keyboard(entry->d_name)) continue;
+        char path[300];
+        snprintf(path, sizeof(path), "/dev/input/%s", entry->d_name);
+        int fd = open(path, O_RDONLY | O_NONBLOCK);
+        if (fd < 0) continue;
+        fds[count++] = fd;
+    }
+    closedir(dir);
+    return count;
+}
+
+static long elapsed_ms(const struct timespec *start) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - start->tv_sec) * 1000L + (now.tv_nsec - start->tv_nsec) / 1000000L;
+}
+
+static int wait_modifiers_released(long timeout_ms) {
+    int fds[MAX_KEYBOARDS];
+    int count = open_physical_keyboards(fds, MAX_KEYBOARDS);
+    if (count == 0) {
+        printf("no-devices\n");
+        return 3;
+    }
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    int result;
+    for (;;) {
+        char held[64] = "";
+        for (int i = 0; i < count; i++) {
+            unsigned char keys[KEY_MAX / 8 + 1];
+            memset(keys, 0, sizeof(keys));
+            if (ioctl(fds[i], EVIOCGKEY(sizeof(keys)), keys) < 0) continue;
+            for (size_t m = 0; m < MODIFIER_KEY_COUNT; m++) {
+                if (!evdev_bit(keys, MODIFIER_KEYS[m].code)) continue;
+                if (strstr(held, MODIFIER_KEYS[m].name)) continue;
+                if (held[0]) strncat(held, ",", sizeof(held) - strlen(held) - 1);
+                strncat(held, MODIFIER_KEYS[m].name, sizeof(held) - strlen(held) - 1);
+            }
+        }
+        long elapsed = elapsed_ms(&start);
+        if (!held[0]) {
+            printf("released %ld\n", elapsed);
+            result = 0;
+            break;
+        }
+        if (elapsed >= timeout_ms) {
+            printf("timeout %ld %s\n", elapsed, held);
+            result = 2;
+            break;
+        }
+        usleep(5000);
+    }
+    /* Releasing an evdev node is a synchronize_rcu, 7-11 ms each, and the
+     * caller waits for this process. A child keeps the nodes referenced until
+     * the parent has exited, so the parent's exit-time closes are not the last
+     * reference and cost nothing; the child then pays the releases with
+     * nobody waiting. It drops the stdio pipes first so the caller sees EOF
+     * as soon as the parent is gone. */
+    fflush(stdout);
+    pid_t child = fork();
+    if (child == 0) {
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+        usleep(100000);
+        for (int i = 0; i < count; i++) close(fds[i]);
+        _exit(0);
+    }
+    if (child > 0) _exit(result);
+    for (int i = 0; i < count; i++) close(fds[i]);
+    return result;
+}
 #endif
 
 static int send_media_play_pause(void) {
@@ -878,9 +1008,12 @@ int main(int argc, char *argv[]) {
     int atspi_selection = 0;
     const char *restore_token = NULL;
     Window target_window = None;
+    long wait_modifiers_ms = -1;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--terminal") == 0) {
+        if (strcmp(argv[i], "--wait-modifiers") == 0 && i + 1 < argc) {
+            wait_modifiers_ms = strtol(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--terminal") == 0) {
             force_terminal = 1;
         } else if (strcmp(argv[i], "--shift-insert") == 0) {
             force_shift_insert = 1;
@@ -921,8 +1054,19 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_ATSPI
         printf(" atspi-selection-v1");
 #endif
+#ifdef HAVE_UINPUT
+        printf(" wait-modifiers-v1");
+#endif
         printf("\n");
         return 0;
+    }
+
+    if (wait_modifiers_ms >= 0) {
+#ifdef HAVE_UINPUT
+        return wait_modifiers_released(wait_modifiers_ms);
+#else
+        return 5;
+#endif
     }
 
     if (atspi_target_only) {

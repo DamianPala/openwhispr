@@ -601,6 +601,76 @@ class ClipboardManager {
     });
   }
 
+  // spawnSync blocks the main process, so the binary is probed once per path.
+  _fastPasteHasCapability(linuxFastPaste, capability) {
+    if (!this.fastPasteCapabilities || this.fastPasteCapabilities.binary !== linuxFastPaste) {
+      let list = [];
+      try {
+        const result = spawnSync(linuxFastPaste, ["--capabilities"], { timeout: 1000 });
+        if (result.status === 0) list = result.stdout.toString().split(/\s+/);
+      } catch {}
+      this.fastPasteCapabilities = { binary: linuxFastPaste, list };
+    }
+    return this.fastPasteCapabilities.list.includes(capability);
+  }
+
+  // The compositor merges modifier state across keyboards, so a Ctrl still
+  // held from the dictation hotkey (Control+Shift+F11) turns the injected
+  // Shift+Insert into Ctrl+Shift+Insert, which no target treats as paste
+  // (Kate: "paste selection"). Blocks until the physical modifiers are up,
+  // 1 s at most; the paste goes ahead either way and the log says what held.
+  _waitForPhysicalModifiers(linuxFastPaste) {
+    if (!linuxFastPaste || !this._fastPasteHasCapability(linuxFastPaste, "wait-modifiers-v1")) {
+      return Promise.resolve(null);
+    }
+    const started = Date.now();
+    return new Promise((resolve) => {
+      let proc;
+      let stdout = "";
+      let done = false;
+      const finish = (status) => {
+        if (done) return;
+        done = true;
+        const [result, waitedMs, held] = stdout.trim().split(" ");
+        const details = {
+          status,
+          result: result || null,
+          waitedMs: waitedMs ? Number(waitedMs) : null,
+          held: held || null,
+          elapsedMs: Date.now() - started,
+        };
+        if (result === "timeout") {
+          debugLogger.warn("Physical modifiers still held, pasting anyway", details, "clipboard");
+        } else if (result !== "released" || details.waitedMs > 0) {
+          debugLogger.debug("Waited for physical modifiers", details, "clipboard");
+        }
+        resolve(details);
+      };
+      try {
+        proc = spawn(linuxFastPaste, ["--wait-modifiers", "1000"], {
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      } catch {
+        return finish("spawn-failed");
+      }
+      const timer = setTimeout(() => {
+        killProcess(proc, "SIGKILL");
+        finish("killed");
+      }, 1500);
+      proc.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      proc.on("error", () => {
+        clearTimeout(timer);
+        finish("error");
+      });
+      proc.on("close", (code) => {
+        clearTimeout(timer);
+        finish(code);
+      });
+    });
+  }
+
   // kdotool only; resolves null when it is missing or fails so the caller can
   // drop to the synchronous probe with its KWin-script fallback. One chained
   // invocation (xdotool-style command chaining): a second spawn would wait
@@ -1596,6 +1666,8 @@ class ClipboardManager {
 
     const targetWindowId = preDetectTargetWindow();
     let detectedWindowClass = preDetectWindowClass(targetWindowId);
+
+    await this._waitForPhysicalModifiers(linuxFastPaste);
 
     // ydotool 0.1.x (Ubuntu 24.04) uses key names; 1.0.x uses raw keycodes.
     // Shift+Insert avoids KEY_V's layout-sensitive position.
