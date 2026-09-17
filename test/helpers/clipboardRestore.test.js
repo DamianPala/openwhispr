@@ -601,6 +601,33 @@ test("KDE pastes through a running ydotoold before the portal", async () => {
   ]);
 });
 
+test("KDE ydotool paste does not block on the window class probe", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSuccessfulSpawn(spawnCalls),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+  manager._detectKdeWindowClass = () => {
+    throw new Error("must not be called on the ydotool fast path");
+  };
+
+  // A promise that never resolves: if pasteLinux awaited it before spawning
+  // ydotool, this test would hang and time out instead of completing.
+  const neverResolves = new Promise(() => {});
+  const result = await withWaylandEnvironment("KDE", () =>
+    manager.pasteLinux(null, { kdeWindowClass: neverResolves })
+  );
+
+  assert.equal(result.method, "ydotool");
+  assert.deepEqual(spawnCalls, [
+    { command: "ydotool", args: ["key", "42:1", "110:1", "110:0", "42:0"] },
+  ]);
+});
+
 test("KDE falls back to the portal when ydotool fails", async () => {
   const spawnCalls = [];
   const TestClipboardManager = loadClipboardManager({
@@ -620,6 +647,58 @@ test("KDE falls back to the portal when ydotool fails", async () => {
     { command: "ydotool", args: ["key", "42:1", "110:1", "110:0", "42:0"] },
     { command: "/tmp/linux-fast-paste", args: ["--portal", "--keycodes", "--shift-insert"] },
   ]);
+});
+
+test("KDE portal fallback still gets --keycodes --shift-insert once the pending probe resolves to a terminal class", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [1, 0]),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._readPortalToken = () => null;
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+
+  // shiftInsert always wins over terminal on KDE (isKde forces shiftInsert
+  // true in tryPortalPaste), so a resolved terminal class must not add
+  // --terminal — pinning today's behavior once the probe is awaited.
+  const result = await withWaylandEnvironment("KDE", () =>
+    manager.pasteLinux(null, { kdeWindowClass: Promise.resolve("konsole") })
+  );
+
+  assert.equal(result.method, "portal");
+  assert.deepEqual(spawnCalls, [
+    { command: "ydotool", args: ["key", "42:1", "110:1", "110:0", "42:0"] },
+    { command: "/tmp/linux-fast-paste", args: ["--portal", "--keycodes", "--shift-insert"] },
+  ]);
+});
+
+test("KDE XTest fallback classifies the target from the deferred probe", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [1, 1, 0]),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager.portalUnavailable = true;
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+
+  // Unlike the portal, the XTest mode flag depends on the window class, so a
+  // probe that resolved to a terminal must yield --terminal here.
+  const result = await withWaylandEnvironment("KDE", async () => {
+    process.env.DISPLAY = ":0";
+    return manager.pasteLinux(null, { kdeWindowClass: Promise.resolve("alacritty") });
+  });
+
+  assert.equal(result.method, "xtest-xwayland");
+  assert.deepEqual(
+    spawnCalls.map((call) => call.args),
+    [["key", "42:1", "110:1", "110:0", "42:0"], ["--uinput", "--shift-insert"], ["--terminal"]]
+  );
 });
 
 test("KDE tries portal before uinput without ydotoold", async () => {
@@ -900,4 +979,20 @@ test("terminal detection matches window classes and macOS app names alike", () =
   assert.equal(manager.isLinuxTerminalWindowClass("konsole"), true);
   assert.equal(manager.isLinuxTerminalWindowClass("org.mozilla.firefox"), false);
   assert.equal(manager.isLinuxTerminalWindowClass(null), false);
+});
+
+test("_detectKdeWindowClassAsync spawns kdotool once for both subcommands", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [0], { stdout: ["google-chrome\n"] }),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "kdotool";
+
+  const result = await manager._detectKdeWindowClassAsync();
+
+  assert.equal(result, "google-chrome");
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0].command, "kdotool");
+  assert.deepEqual(spawnCalls[0].args, ["getactivewindow", "getwindowclassname"]);
 });

@@ -602,32 +602,32 @@ class ClipboardManager {
   }
 
   // kdotool only; resolves null when it is missing or fails so the caller can
-  // drop to the synchronous probe with its KWin-script fallback.
-  async _detectKdeWindowClassAsync() {
-    if (!this.commandExists("kdotool")) return null;
-    const run = (args) =>
-      new Promise((resolve) => {
-        let stdout = "";
-        let proc;
-        try {
-          proc = spawn("kdotool", args, { stdio: ["ignore", "pipe", "ignore"] });
-        } catch {
-          return resolve(null);
-        }
-        const timer = setTimeout(() => killProcess(proc, "SIGKILL"), 1000);
-        proc.stdout.on("data", (chunk) => {
-          stdout += chunk;
+  // drop to the synchronous probe with its KWin-script fallback. One chained
+  // invocation (xdotool-style command chaining): a second spawn would wait
+  // behind the clipboard spawnSync calls on the main process event loop again.
+  _detectKdeWindowClassAsync() {
+    if (!this.commandExists("kdotool")) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let stdout = "";
+      let proc;
+      try {
+        proc = spawn("kdotool", ["getactivewindow", "getwindowclassname"], {
+          stdio: ["ignore", "pipe", "ignore"],
         });
-        proc.on("error", () => resolve(null));
-        proc.on("close", (code) => {
-          clearTimeout(timer);
-          resolve(code === 0 ? stdout.trim() : null);
-        });
+      } catch {
+        return resolve(null);
+      }
+      const timer = setTimeout(() => killProcess(proc, "SIGKILL"), 1000);
+      proc.stdout.on("data", (chunk) => {
+        stdout += chunk;
       });
-    const winId = await run(["getactivewindow"]);
-    if (!winId) return null;
-    const cls = await run(["getwindowclassname", winId]);
-    return cls ? cls.toLowerCase() : null;
+      proc.on("error", () => resolve(null));
+      proc.on("close", (code) => {
+        clearTimeout(timer);
+        const cls = code === 0 ? stdout.trim().toLowerCase() : "";
+        resolve(cls || null);
+      });
+    });
   }
 
   _detectKdeWindowClass() {
@@ -940,9 +940,11 @@ class ClipboardManager {
 
     try {
       // Runs alongside the clipboard save/write below instead of after them.
+      // The ydotoold path on KDE never awaits it, so a rejection must not
+      // surface as unhandled.
       const kdeWindowClass =
         platform === "linux" && getLinuxSessionInfo().isKde
-          ? this._detectKdeWindowClassAsync()
+          ? this._detectKdeWindowClassAsync().catch(() => null)
           : null;
       const shouldRestore = options.restoreClipboard !== false;
       const originalClipboard = shouldRestore ? this._saveClipboard() : null;
@@ -1595,6 +1597,41 @@ class ClipboardManager {
     const targetWindowId = preDetectTargetWindow();
     let detectedWindowClass = preDetectWindowClass(targetWindowId);
 
+    // ydotool 0.1.x (Ubuntu 24.04) uses key names; 1.0.x uses raw keycodes.
+    // Shift+Insert avoids KEY_V's layout-sensitive position.
+    const shiftInsertYdotoolArgs = () =>
+      this._isYdotoolLegacy() ? ["key", "shift+Insert"] : ["key", "42:1", "110:1", "110:0", "42:0"];
+    let ydotoolAttempted = false;
+
+    // KDE: a running ydotoold owns a persistent uinput keyboard, and its
+    // keys are indistinguishable from a physical one, so every toolkit
+    // takes them. KWin's fake-input path (the portal) is not: Chromium's
+    // Wayland backend only sometimes acts on it (Plasma 6.6, 2026-09:
+    // Chrome never pasted, Brave about half the time, VS Code most times,
+    // with Shift+Insert or Ctrl+V and any key spacing up to 100 ms), and it
+    // reports success either way. The clipboard is unaffected by the input
+    // path: KWin bridges the X11 selection this XWayland app writes to the
+    // Wayland side, and ydotool pastes the right text into native Wayland
+    // windows. The portal stays as the zero-setup fallback.
+    // Runs before the window class is awaited: Shift+Insert is sent whatever
+    // the target, so the kdotool probe (tens of ms behind the clipboard
+    // spawnSync calls on this event loop) only matters to the fallbacks.
+    if (isKde && ydotoolDaemonRunning) {
+      ydotoolAttempted = true;
+      try {
+        await this._runLinuxPasteCommand("ydotool", shiftInsertYdotoolArgs(), "ydotool");
+        this.safeLog("✅ Paste successful using ydotool");
+        debugLogger.info("Paste successful", { tool: "ydotool" }, "clipboard");
+        return { method: "ydotool", restoreComplete: restoreClipboard() };
+      } catch (error) {
+        debugLogger.warn(
+          "ydotool paste failed on KDE, trying the portal",
+          { error: error?.message },
+          "clipboard"
+        );
+      }
+    }
+
     if (!detectedWindowClass && isKde) {
       detectedWindowClass =
         (await options.kdeWindowClass?.catch?.(() => null)) || this._detectKdeWindowClass();
@@ -1644,13 +1681,10 @@ class ClipboardManager {
         ? ["-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl"]
         : ["-M", "ctrl", "-k", "v", "-m", "ctrl"];
 
-    // ydotool 0.1.x (Ubuntu 24.04) uses key names; 1.0.x uses raw keycodes.
-    // Wayland's physical fallback is always Shift+Insert to avoid KEY_V's layout-sensitive position.
+    // Wayland's physical fallback is always Shift+Insert.
     const buildYdotoolArgs = () => {
+      if (isWayland || useShiftInsert) return shiftInsertYdotoolArgs();
       const legacyYdotool = this._isYdotoolLegacy();
-      if (isWayland || useShiftInsert) {
-        return legacyYdotool ? ["key", "shift+Insert"] : ["key", "42:1", "110:1", "110:0", "42:0"];
-      }
       if (isTerminalTarget) {
         return legacyYdotool
           ? ["key", "ctrl+shift+v"]
@@ -1658,7 +1692,6 @@ class ClipboardManager {
       }
       return legacyYdotool ? ["key", "ctrl+v"] : ["key", "29:1", "47:1", "47:0", "29:0"];
     };
-    let ydotoolAttempted = false;
 
     // Konsole on X11 silently drops simulated Ctrl+Shift+V via XTest (a long-standing
     // focus/grab quirk), and the native fast-paste binary uses XTest. Route Konsole+X11
@@ -1795,36 +1828,8 @@ class ClipboardManager {
           }
         };
 
-        // KDE: a running ydotoold owns a persistent uinput keyboard, and its
-        // keys are indistinguishable from a physical one, so every toolkit
-        // takes them. KWin's fake-input path (the portal) is not: Chromium's
-        // Wayland backend only sometimes acts on it (Plasma 6.6, 2026-09:
-        // Chrome never pasted, Brave about half the time, VS Code most times,
-        // with Shift+Insert or Ctrl+V and any key spacing up to 100 ms), and it
-        // reports success either way. The clipboard is unaffected by the input
-        // path: KWin bridges the X11 selection this XWayland app writes to the
-        // Wayland side, and ydotool pastes the right text into native Wayland
-        // windows. The portal stays as the zero-setup fallback.
-        if (isKde && ydotoolDaemonRunning) {
-          ydotoolAttempted = true;
-          try {
-            await this._runLinuxPasteCommand("ydotool", buildYdotoolArgs(), "ydotool");
-            this.safeLog("✅ Paste successful using ydotool");
-            debugLogger.info(
-              "Paste successful",
-              { tool: "ydotool", detectedWindowClass },
-              "clipboard"
-            );
-            return { method: "ydotool", restoreComplete: restoreClipboard() };
-          } catch (error) {
-            debugLogger.warn(
-              "ydotool paste failed on KDE, trying the portal",
-              { error: error?.message },
-              "clipboard"
-            );
-          }
-        }
-
+        // KDE: the ydotoold attempt ran before the window probe was awaited;
+        // the portal is the zero-setup fallback.
         if (isKde && !this.portalDenied && !this.portalUnavailable && !this.portalFailed) {
           const portalPaste = await tryPortalPaste();
           if (portalPaste) return { method: "portal", ...portalPaste };
