@@ -1795,8 +1795,36 @@ class ClipboardManager {
           }
         };
 
-        // KDE with XWayland: portal first because clipboard and input are both
-        // on X11; uinput causes clipboard desync (X11 clipboard vs Wayland input).
+        // KDE: a running ydotoold owns a persistent uinput keyboard, and its
+        // keys are indistinguishable from a physical one, so every toolkit
+        // takes them. KWin's fake-input path (the portal) is not: Chromium's
+        // Wayland backend only sometimes acts on it (Plasma 6.6, 2026-09:
+        // Chrome never pasted, Brave about half the time, VS Code most times,
+        // with Shift+Insert or Ctrl+V and any key spacing up to 100 ms), and it
+        // reports success either way. The clipboard is unaffected by the input
+        // path: KWin bridges the X11 selection this XWayland app writes to the
+        // Wayland side, and ydotool pastes the right text into native Wayland
+        // windows. The portal stays as the zero-setup fallback.
+        if (isKde && ydotoolDaemonRunning) {
+          ydotoolAttempted = true;
+          try {
+            await this._runLinuxPasteCommand("ydotool", buildYdotoolArgs(), "ydotool");
+            this.safeLog("✅ Paste successful using ydotool");
+            debugLogger.info(
+              "Paste successful",
+              { tool: "ydotool", detectedWindowClass },
+              "clipboard"
+            );
+            return { method: "ydotool", restoreComplete: restoreClipboard() };
+          } catch (error) {
+            debugLogger.warn(
+              "ydotool paste failed on KDE, trying the portal",
+              { error: error?.message },
+              "clipboard"
+            );
+          }
+        }
+
         if (isKde && !this.portalDenied && !this.portalUnavailable && !this.portalFailed) {
           const portalPaste = await tryPortalPaste();
           if (portalPaste) return { method: "portal", ...portalPaste };

@@ -825,7 +825,8 @@ UI icons come from `src/components/icons/` (vendored Nucleo core outline compone
      - X11: xdotool fallback if native binary unavailable
      - Hyprland Wayland: wtype → sendshortcut → uinput/ydotool
      - Sway/wlroots Wayland: wtype → uinput/ydotool
-     - GNOME/KDE Wayland: portal keysyms → uinput/ydotool
+     - GNOME Wayland: portal keysyms → uinput/ydotool
+     - KDE Wayland: ydotoold → portal keycodes → uinput (KWin fake-input is unreliable for Chromium targets)
      - Physical Wayland fallbacks use Shift+Insert to avoid layout-sensitive KEY_V
    - Windows: PowerShell SendKeys (built-in) or nircmd.exe (bundled)
 
@@ -904,7 +905,8 @@ UI icons come from `src/components/icons/` (vendored Nucleo core outline compone
   - **X11**: `xdotool` (recommended)
   - **Hyprland Wayland**: `wtype`, then `hyprctl` sendshortcut (avoids the sendshortcut stuck-modifier bug when wtype is installed)
   - **Sway/wlroots Wayland**: `wtype` (requires the virtual keyboard protocol)
-  - **GNOME/KDE Wayland**: RemoteDesktop portal keysyms, then uinput/ydotool
+  - **GNOME Wayland**: RemoteDesktop portal keysyms, then uinput/ydotool
+  - **KDE Wayland**: a running `ydotoold` first (Chrome, Brave and Electron apps ignore KWin's fake-input keys), then the RemoteDesktop portal with keycodes, then uinput
   - **Wayland physical fallback**: Shift+Insert avoids layout-sensitive KEY_V; `ydotool` requires the `ydotoold` daemon
   - Terminal detection: Auto-detects terminal emulators and uses Ctrl+Shift+V
   - Fallback: Text copied to clipboard with manual paste instructions

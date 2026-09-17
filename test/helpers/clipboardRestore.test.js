@@ -580,7 +580,49 @@ test("GNOME does not retry a failed ydotool after the native paths also fail", a
   );
 });
 
-test("KDE tries portal before uinput", async () => {
+test("KDE pastes through a running ydotoold before the portal", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSuccessfulSpawn(spawnCalls),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._readPortalToken = () => "restore-token";
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+  manager._detectKdeWindowClass = () => "google-chrome";
+
+  const result = await withWaylandEnvironment("KDE", () => manager.pasteLinux(null));
+
+  assert.equal(result.method, "ydotool");
+  assert.deepEqual(spawnCalls, [
+    { command: "ydotool", args: ["key", "42:1", "110:1", "110:0", "42:0"] },
+  ]);
+});
+
+test("KDE falls back to the portal when ydotool fails", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [1, 0]),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._readPortalToken = () => null;
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+
+  const result = await withWaylandEnvironment("KDE", () => manager.pasteLinux(null));
+
+  assert.equal(result.method, "portal");
+  assert.deepEqual(spawnCalls, [
+    { command: "ydotool", args: ["key", "42:1", "110:1", "110:0", "42:0"] },
+    { command: "/tmp/linux-fast-paste", args: ["--portal", "--keycodes", "--shift-insert"] },
+  ]);
+});
+
+test("KDE tries portal before uinput without ydotoold", async () => {
   const spawnCalls = [];
   const TestClipboardManager = loadClipboardManager({
     spawn: createSpawn(spawnCalls, [1, 0]),
