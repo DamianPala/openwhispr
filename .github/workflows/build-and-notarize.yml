@@ -9,6 +9,12 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish the installers as a GitHub prerelease under this tag (e.g. v1.10.2-soniox.1). Empty: artifacts only."
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -442,3 +448,49 @@ jobs:
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
           rm -f $RUNNER_TEMP/build_certificate.p12
           rm -f $RUNNER_TEMP/api_key.p8
+
+  # Installers only, published from the artifacts the jobs above already built.
+  # Kept separate from release.yml, which needs the upstream signing secrets and
+  # publishes straight to OpenWhispr/openwhispr.
+  release:
+    needs: [build-linux, build-windows, build-macos]
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect installers
+        run: |
+          mkdir release
+          cp artifacts/linux-build/*.AppImage artifacts/linux-build/*.deb release/
+          cp artifacts/windows-build/*Setup*.exe release/
+          cp artifacts/macos-arm64-build/*.dmg artifacts/macos-x64-build/*.dmg release/
+          ls -la release
+          test "$(ls release | wc -l)" -eq 5 || { echo "Expected 5 installers"; exit 1; }
+
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          VERSION=$(ls release/*.AppImage | sed -E 's/.*OpenWhispr-([^-]+)-linux.*/\1/')
+          cat > notes.md <<EOF
+          OpenWhispr $VERSION with the Soniox realtime provider (bring your own key). Built from \`${GITHUB_SHA}\`.
+
+          These builds are not code-signed:
+          - **Windows** (\`OpenWhispr Setup $VERSION.exe\`): SmartScreen will warn; choose *More info* → *Run anyway*.
+          - **macOS** (\`OpenWhispr-$VERSION-arm64.dmg\` for Apple Silicon, \`OpenWhispr-$VERSION.dmg\` for Intel): after copying the app, run \`xattr -d com.apple.quarantine /Applications/OpenWhispr.app\` once.
+          - **Linux**: AppImage (any distro) or .deb (Debian/Ubuntu).
+
+          Soniox: paste your own API key in Settings and pick the region your key belongs to.
+          EOF
+          gh release create "$RELEASE_TAG" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "OpenWhispr $VERSION (Soniox)" \
+            --notes-file notes.md
