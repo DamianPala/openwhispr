@@ -13,6 +13,12 @@ const CACHE_TTL_MS = 30000;
 // only exists to debounce the dialog shown on denial.
 const ACCESSIBILITY_CHECK_TTL_MS = 5000;
 
+// wl-copy, xclip and xsel fork a child that keeps serving the selection and
+// inherits our stdout/stderr, so a piped spawnSync only returns when its
+// timeout fires (measured: xclip 203 ms, wl-copy the full timeout). With the
+// output fds ignored the parent's exit ends the call in a few ms.
+const SELECTION_OWNER_STDIO = ["pipe", "ignore", "ignore"];
+
 const PASTE_DELAYS = {
   darwin: 120,
   win32_fast: 10,
@@ -124,6 +130,7 @@ class ClipboardManager {
           const result = spawnSync("xclip", ["-selection", "clipboard"], {
             input: text,
             timeout: 200,
+            stdio: SELECTION_OWNER_STDIO,
           });
           if (result.status === 0) {
             clipboard.writeText(text);
@@ -136,6 +143,7 @@ class ClipboardManager {
           const result = spawnSync("xsel", ["--clipboard", "--input"], {
             input: text,
             timeout: 200,
+            stdio: SELECTION_OWNER_STDIO,
           });
           if (result.status === 0) {
             clipboard.writeText(text);
@@ -150,7 +158,10 @@ class ClipboardManager {
 
     if (this.commandExists("wl-copy")) {
       try {
-        const result = spawnSync("wl-copy", ["--", text], { timeout: 50 });
+        const result = spawnSync("wl-copy", ["--", text], {
+          timeout: 50,
+          stdio: SELECTION_OWNER_STDIO,
+        });
         if (result.status === 0) {
           clipboard.writeText(text);
           return;
@@ -177,7 +188,10 @@ class ClipboardManager {
 
     if (isWayland && this.commandExists("wl-copy")) {
       try {
-        const result = spawnSync("wl-copy", ["--primary", "--", text], { timeout: 50 });
+        const result = spawnSync("wl-copy", ["--primary", "--", text], {
+          timeout: 50,
+          stdio: SELECTION_OWNER_STDIO,
+        });
         if (result.status === 0) return;
       } catch {}
     }
@@ -187,6 +201,7 @@ class ClipboardManager {
         const result = spawnSync("xclip", ["-selection", "primary"], {
           input: text,
           timeout: 200,
+          stdio: SELECTION_OWNER_STDIO,
         });
         if (result.status === 0) return;
       } catch {}
@@ -197,6 +212,7 @@ class ClipboardManager {
         const result = spawnSync("xsel", ["--primary", "--input"], {
           input: text,
           timeout: 200,
+          stdio: SELECTION_OWNER_STDIO,
         });
         if (result.status === 0) return;
       } catch {}
@@ -257,17 +273,25 @@ class ClipboardManager {
   _writeClipboardTextAll(text) {
     if (this._isWayland() && this.commandExists("wl-copy")) {
       try {
-        spawnSync("wl-copy", ["--", text], { timeout: 200 });
+        spawnSync("wl-copy", ["--", text], { timeout: 200, stdio: SELECTION_OWNER_STDIO });
       } catch {}
     }
     if (process.platform === "linux" && this.commandExists("xclip")) {
       try {
-        spawnSync("xclip", ["-selection", "clipboard"], { input: text, timeout: 200 });
+        spawnSync("xclip", ["-selection", "clipboard"], {
+          input: text,
+          timeout: 200,
+          stdio: SELECTION_OWNER_STDIO,
+        });
       } catch {}
     }
     if (process.platform === "linux" && this.commandExists("xsel")) {
       try {
-        spawnSync("xsel", ["--clipboard", "--input"], { input: text, timeout: 200 });
+        spawnSync("xsel", ["--clipboard", "--input"], {
+          input: text,
+          timeout: 200,
+          stdio: SELECTION_OWNER_STDIO,
+        });
       } catch {}
     }
     clipboard.writeText(text);
