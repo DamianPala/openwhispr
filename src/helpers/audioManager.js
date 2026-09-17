@@ -390,6 +390,10 @@ const STREAMING_PROVIDERS = {
     onSessionEnd: (cb) => window.electronAPI.onAssemblyAiSessionEnd(cb),
   },
   soniox: {
+    // finalize is answered with every remaining token as final plus a <fin>
+    // marker, so the stop path settles on that marker instead of a timer.
+    awaitsFinalTranscript: true,
+    onFinalized: (cb) => window.electronAPI.onSonioxFinalized(cb),
     warmup: (opts) => window.electronAPI.sonioxStreamingWarmup(opts),
     start: (opts) => window.electronAPI.sonioxStreamingStart(opts),
     send: (buf) => window.electronAPI.sonioxStreamingSend(buf),
@@ -601,6 +605,7 @@ class AudioManager {
     this.streamingPartialText = "";
     this.streamingTextBump = null;
     this.streamingTextDebounce = null;
+    this.streamingFinalizedSettle = null;
     this.cachedMicDeviceId = null;
     this.rejectedMicDeviceId = null;
     this.persistentAudioContext = null;
@@ -4530,6 +4535,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       this.streamingPartialText = "";
       this.streamingTextBump = null;
       this.streamingTextDebounce = null;
+      this.streamingFinalizedSettle = null;
 
       const partialCleanup = provider.onPartial((text) => {
         if (!ownsSession()) return;
@@ -4579,7 +4585,18 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         }
       });
 
-      this.streamingCleanupFns = [partialCleanup, finalCleanup, errorCleanup, sessionEndCleanup];
+      const finalizedCleanup = provider.onFinalized?.(() => {
+        if (!ownsSession()) return;
+        this.streamingFinalizedSettle?.();
+      });
+
+      this.streamingCleanupFns = [
+        partialCleanup,
+        finalCleanup,
+        errorCleanup,
+        sessionEndCleanup,
+        finalizedCleanup,
+      ].filter(Boolean);
       if (startWasCancelled()) {
         // Cancelled while the mic was opening: never flip to recording.
         await this.cleanupStreaming();
@@ -4751,7 +4768,8 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
   // Resolves once the transcript stops moving. An outstanding partial proves its
   // final is still in flight, so only the ceiling ends the wait until it lands —
-  // a plain debounce would expire on the very tail this exists to catch.
+  // a plain debounce would expire on the very tail this exists to catch. A
+  // provider that marks the end of its finalize settles the wait outright.
   awaitStreamingTextSettled(ceilingMs = STREAMING_FINAL_CEILING_MS) {
     return new Promise((resolve) => {
       const settle = () => {
@@ -4759,8 +4777,10 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         clearTimeout(ceiling);
         this.streamingTextBump = null;
         this.streamingTextDebounce = null;
+        this.streamingFinalizedSettle = null;
         resolve();
       };
+      this.streamingFinalizedSettle = settle;
       const ceiling = setTimeout(settle, ceilingMs);
       const arm = () => {
         clearTimeout(this.streamingTextDebounce);
@@ -5488,6 +5508,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this.streamingTextBump = null;
     clearTimeout(this.streamingTextDebounce);
     this.streamingTextDebounce = null;
+    this.streamingFinalizedSettle = null;
   }
 
   async cleanupStreaming() {

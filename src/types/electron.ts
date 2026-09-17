@@ -2773,6 +2773,7 @@ declare global {
       onSonioxFinalTranscript?: (callback: (text: string) => void) => () => void;
       onSonioxError?: (callback: (error: string) => void) => () => void;
       onSonioxSessionEnd?: (callback: (data: { text?: string }) => void) => () => void;
+      onSonioxFinalized?: (callback: () => void) => () => void;
 
       // Gemini Live Streaming
       geminiStreamingWarmup?: (

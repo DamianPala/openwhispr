@@ -10920,6 +10920,7 @@ class IPCHandlers {
       streaming.onFinalTranscript = (text) => emit("soniox-final-transcript", text);
       streaming.onError = (error) => emit("soniox-error", error.message);
       streaming.onSessionEnd = (data) => emit("soniox-session-end", data);
+      streaming.onFinalized = () => emit("soniox-finalized");
       return streaming;
     };
 

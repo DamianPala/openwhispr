@@ -875,6 +875,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     "soniox-session-end",
     (callback) => (_event, data) => callback(data)
   ),
+  onSonioxFinalized: registerListener("soniox-finalized", (callback) => () => callback()),
 
   // Gemini Live Streaming
   geminiStreamingWarmup: (options) => ipcRenderer.invoke("gemini-streaming-warmup", options),
