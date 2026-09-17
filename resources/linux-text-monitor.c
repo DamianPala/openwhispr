@@ -5,6 +5,14 @@
  * Outputs "CHANGED:<value>" to stdout when the text changes.
  * Exits after a timeout or on receiving a termination signal.
  *
+ * The focused element is looked for inside ACTIVE toplevel windows first and
+ * only then in every application's whole tree. Each AT-SPI node costs a D-Bus
+ * round trip (~1.5 ms) and some applications expose enormous trees (LibreOffice
+ * Writer: one node per paragraph, materialised on demand), so the search has a
+ * wall-clock budget and the whole process has a hard lifetime cap; without
+ * them a walk could run for hours and, being stuck in blocking calls, never
+ * notice SIGTERM.
+ *
  * Protocol (stdout):
  *   INITIAL_VALUE:<text>  - Initial text field value
  *   INITIAL_VALUE_B64:<base64> - Initial text field value (multiline)
@@ -38,13 +46,44 @@
 #define TIMEOUT_SECONDS 30
 #define POLL_INTERVAL_MS 500
 #define MAX_OUTPUT_CHARS 10240
+#define SEARCH_BUDGET_MS 2500
+#define LIFETIME_SLACK_SECONDS 10
+#define PROBE_LIFETIME_SECONDS 10
 
-static volatile sig_atomic_t running = 1;
+static struct timespec search_deadline;
 static const char BASE64_TABLE[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+/* Every line is flushed as it is written, so nothing is lost by leaving at
+ * once. Setting a flag instead would only be honoured by the poll loop; a
+ * process still walking the tree would keep going. */
 static void signal_handler(int sig) {
     (void)sig;
-    running = 0;
+    _exit(0);
+}
+
+static void arm_search_deadline(void) {
+    clock_gettime(CLOCK_MONOTONIC, &search_deadline);
+    search_deadline.tv_sec += SEARCH_BUDGET_MS / 1000;
+    search_deadline.tv_nsec += (SEARCH_BUDGET_MS % 1000) * 1000000L;
+    if (search_deadline.tv_nsec >= 1000000000L) {
+        search_deadline.tv_sec += 1;
+        search_deadline.tv_nsec -= 1000000000L;
+    }
+}
+
+static int search_expired(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec > search_deadline.tv_sec ||
+           (now.tv_sec == search_deadline.tv_sec && now.tv_nsec >= search_deadline.tv_nsec);
+}
+
+static int has_state(AtspiAccessible *accessible, AtspiStateType state) {
+    AtspiStateSet *states = atspi_accessible_get_state_set(accessible);
+    if (!states) return 0;
+    int result = atspi_state_set_contains(states, state);
+    g_object_unref(states);
+    return result;
 }
 
 static char *base64_encode(const unsigned char *data, size_t len) {
@@ -98,14 +137,8 @@ static void print_text_output(const char *name, const char *value) {
 static AtspiAccessible *find_focused(AtspiAccessible *accessible) {
     GError *error = NULL;
 
-    AtspiStateSet *states = atspi_accessible_get_state_set(accessible);
-    if (states) {
-        if (atspi_state_set_contains(states, ATSPI_STATE_FOCUSED)) {
-            g_object_unref(states);
-            return g_object_ref(accessible);
-        }
-        g_object_unref(states);
-    }
+    if (search_expired()) return NULL;
+    if (has_state(accessible, ATSPI_STATE_FOCUSED)) return g_object_ref(accessible);
 
     int count = atspi_accessible_get_child_count(accessible, &error);
     if (error) {
@@ -113,7 +146,7 @@ static AtspiAccessible *find_focused(AtspiAccessible *accessible) {
         return NULL;
     }
 
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count && !search_expired(); i++) {
         AtspiAccessible *child = atspi_accessible_get_child_at_index(accessible, i, &error);
         if (error) {
             g_error_free(error);
@@ -128,6 +161,64 @@ static AtspiAccessible *find_focused(AtspiAccessible *accessible) {
     }
 
     return NULL;
+}
+
+/* Toolkits flag the toplevel that owns keyboard focus as ACTIVE, so its
+ * subtree is where the focused element is; the other applications' trees
+ * never need to be touched. */
+static AtspiAccessible *find_focused_in_active_window(AtspiAccessible *app) {
+    GError *error = NULL;
+
+    int count = atspi_accessible_get_child_count(app, &error);
+    if (error) {
+        g_error_free(error);
+        return NULL;
+    }
+
+    for (int i = 0; i < count && !search_expired(); i++) {
+        AtspiAccessible *window = atspi_accessible_get_child_at_index(app, i, &error);
+        if (error) {
+            g_error_free(error);
+            error = NULL;
+            continue;
+        }
+        if (!window) continue;
+
+        AtspiAccessible *result = NULL;
+        if (has_state(window, ATSPI_STATE_ACTIVE)) result = find_focused(window);
+        g_object_unref(window);
+        if (result) return result;
+    }
+
+    return NULL;
+}
+
+typedef AtspiAccessible *(*app_search_fn)(AtspiAccessible *app);
+
+static AtspiAccessible *search_applications(AtspiAccessible *desktop, app_search_fn search) {
+    GError *error = NULL;
+    AtspiAccessible *focused = NULL;
+
+    int app_count = atspi_accessible_get_child_count(desktop, &error);
+    if (error) {
+        g_error_free(error);
+        return NULL;
+    }
+
+    for (int i = 0; i < app_count && !focused && !search_expired(); i++) {
+        AtspiAccessible *app = atspi_accessible_get_child_at_index(desktop, i, &error);
+        if (error) {
+            g_error_free(error);
+            error = NULL;
+            continue;
+        }
+        if (!app) continue;
+
+        focused = search(app);
+        g_object_unref(app);
+    }
+
+    return focused;
 }
 
 static char *read_text_value(AtspiText *text_iface) {
@@ -156,6 +247,10 @@ int main(int argc, char **argv) {
 
     int probe_editable = argc >= 2 && strcmp(argv[1], "--probe-editable") == 0;
 
+    /* Hard cap on the process lifetime, honoured even inside a blocking
+     * AT-SPI call (SIGALRM's default action terminates the process). */
+    alarm(probe_editable ? PROBE_LIFETIME_SECONDS : TIMEOUT_SECONDS + LIFETIME_SLACK_SECONDS);
+
     /* Read original text from stdin (consume but don't use) */
     char stdin_buf[4096];
     if (!probe_editable && fgets(stdin_buf, sizeof(stdin_buf), stdin)) {
@@ -169,7 +264,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    GError *error = NULL;
     AtspiAccessible *desktop = atspi_get_desktop(0);
     if (!desktop) {
         printf("NO_ELEMENT\n");
@@ -177,27 +271,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Search for focused element across all applications */
-    AtspiAccessible *focused = NULL;
-    int app_count = atspi_accessible_get_child_count(desktop, &error);
-    if (error) {
-        g_error_free(error);
-        error = NULL;
-        app_count = 0;
-    }
-
-    for (int i = 0; i < app_count && !focused; i++) {
-        AtspiAccessible *app = atspi_accessible_get_child_at_index(desktop, i, &error);
-        if (error) {
-            g_error_free(error);
-            error = NULL;
-            continue;
-        }
-        if (!app) continue;
-
-        focused = find_focused(app);
-        g_object_unref(app);
-    }
+    arm_search_deadline();
+    AtspiAccessible *focused = search_applications(desktop, find_focused_in_active_window);
+    if (!focused) focused = search_applications(desktop, find_focused);
 
     g_object_unref(desktop);
 
@@ -212,15 +288,15 @@ int main(int argc, char **argv) {
         int editable = states &&
             atspi_state_set_contains(states, ATSPI_STATE_EDITABLE) &&
             atspi_state_set_contains(states, ATSPI_STATE_ENABLED) &&
-            atspi_state_set_contains(states, ATSPI_STATE_FOCUSABLE) &&
-            !atspi_state_set_contains(states, ATSPI_STATE_PROTECTED);
+            atspi_state_set_contains(states, ATSPI_STATE_FOCUSABLE);
         if (states) g_object_unref(states);
         /* A shell prompt must never read as a writable caret: pasted newlines
          * execute. VTE and Qt terminals expose ATSPI_ROLE_TERMINAL; the caller
-         * separately refuses terminals by executable name. */
-        if (editable &&
-            atspi_accessible_get_role(focused, NULL) == ATSPI_ROLE_TERMINAL) {
-            editable = 0;
+         * separately refuses terminals by executable name. AT-SPI has no
+         * "protected" state; password fields are told apart by role. */
+        if (editable) {
+            AtspiRole role = atspi_accessible_get_role(focused, NULL);
+            if (role == ATSPI_ROLE_TERMINAL || role == ATSPI_ROLE_PASSWORD_TEXT) editable = 0;
         }
         /* A live selection means an EDITABLE verdict would let generated text
          * paste over the user's highlighted text. This is the authoritative
@@ -271,7 +347,7 @@ int main(int argc, char **argv) {
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    while (running) {
+    for (;;) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         long elapsed_ms = (now.tv_sec - start.tv_sec) * 1000 +
