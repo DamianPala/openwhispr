@@ -83,6 +83,30 @@ test("a provider can widen the ceiling for a slower final", async (t) => {
   assert.ok(ms < CEILING_MS, `fell back to the default ceiling: ${ms}ms`);
 });
 
+test("a provider's finalized marker settles the wait outright, even mid-partial", async (t) => {
+  const manager = await loadManager(t);
+  const finalizedAt = 40;
+  manager.streamingPartialText = "still moving";
+  setTimeout(() => manager.streamingFinalizedSettle?.(), finalizedAt);
+
+  const ms = await elapsed(() => manager.awaitStreamingTextSettled());
+
+  assert.ok(ms < QUIET_MS, `waited for the quiet window instead of the marker: ${ms}ms`);
+  assert.equal(manager.streamingFinalizedSettle, null);
+});
+
+test("tearing down the listeners settles a wait that can no longer move", async (t) => {
+  const manager = await loadManager(t);
+  manager.streamingCleanupFns = [];
+  manager.streamingPartialText = "still moving";
+  setTimeout(() => manager.cleanupStreamingListeners(), 40);
+
+  const ms = await elapsed(() => manager.awaitStreamingTextSettled());
+
+  assert.ok(ms < QUIET_MS, `waited for the ceiling after teardown: ${ms}ms`);
+  assert.equal(manager.streamingFinalizedSettle, null);
+});
+
 test("clears its timers so a settled wait leaves no handles behind", async (t) => {
   const manager = await loadManager(t);
 
@@ -90,4 +114,5 @@ test("clears its timers so a settled wait leaves no handles behind", async (t) =
 
   assert.equal(manager.streamingTextBump, null);
   assert.equal(manager.streamingTextDebounce, null);
+  assert.equal(manager.streamingFinalizedSettle, null);
 });
