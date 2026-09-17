@@ -156,6 +156,69 @@ describe("removeFillers", () => {
   it("removes period when filler is at end of text", () => {
     assert.equal(removeFillers("that is all uh."), "that is all");
   });
+
+  // Hyphenated words are not fillers
+
+  it("preserves hyphenated words that start with a filler", () => {
+    assert.equal(removeFillers("uh-huh"), "uh-huh");
+    assert.equal(removeFillers("Uh-oh, that broke."), "Uh-oh, that broke.");
+    assert.equal(removeFillers("um-hmm"), "um-hmm");
+  });
+
+  it("does not cut words where a filler substring meets a non-ASCII letter", () => {
+    assert.equal(removeFillers("Umówmy się na jutro."), "Umówmy się na jutro.");
+    assert.equal(removeFillers("tłum ludzi"), "tłum ludzi");
+    assert.equal(removeFillers("umówiłem się, um, na jutro"), "umówiłem się na jutro");
+  });
+
+  // Punctuation is not orphaned when a filler is removed
+
+  it("does not orphan punctuation after removing a filler", () => {
+    assert.equal(removeFillers("uh?"), "");
+    assert.equal(removeFillers("um!"), "");
+    assert.equal(removeFillers("um..."), "");
+    assert.equal(removeFillers("Um? Really."), "Really.");
+    assert.equal(removeFillers("So um... yeah"), "So yeah");
+  });
+
+  // Capitalization only happens where a filler was actually removed, not
+  // after every sentence-ending punctuation mark in the text.
+
+  it("does not capitalize abbreviations or list markers with no filler removed", () => {
+    assert.equal(removeFillers("e.g. the thing works"), "e.g. the thing works");
+    assert.equal(removeFillers("vs. the other one"), "vs. the other one");
+    assert.equal(removeFillers("ok. i.e. this"), "ok. i.e. this");
+    assert.equal(removeFillers("1. first 2. second"), "1. first 2. second");
+  });
+
+  it("still capitalizes where a filler was removed", () => {
+    assert.equal(removeFillers("done. Yyy, let me check"), "done. Let me check");
+    assert.equal(removeFillers("it works, um. but not always."), "it works. But not always.");
+  });
+
+  // Newlines are preserved
+
+  it("preserves newlines around a removed filler", () => {
+    assert.equal(removeFillers("first line um\n\nsecond line"), "first line\n\nsecond line");
+  });
+
+  // Performance guard: no catastrophic backtracking
+
+  it("handles a large number of fillers without catastrophic backtracking", () => {
+    const start = Date.now();
+    removeFillers("uh ".repeat(20000));
+    assert.ok(Date.now() - start < 2000);
+  });
+
+  // Polish abbreviations are not sentence boundaries
+
+  it("does not capitalize after a Polish abbreviation with no filler removed", () => {
+    assert.equal(removeFillers("Kup np. jabłka i gruszki."), "Kup np. jabłka i gruszki.");
+  });
+
+  it("still capitalizes before a Polish abbreviation when a filler was removed", () => {
+    assert.equal(removeFillers("Yyy, kup np. jabłka."), "Kup np. jabłka.");
+  });
 });
 
 describe("buildConfigMessage", () => {

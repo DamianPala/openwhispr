@@ -63,33 +63,73 @@ const warmIdentity = (options) =>
 // Filler words / hesitations to strip from assembled text.
 // Soniox uses sub-word (BPE) tokenization, so fillers must be removed from the
 // joined text rather than individual tokens.
+//
+// Ported from the Hermes Soniox STT plugin (__init__.py's _filler_re /
+// _replace_filler / _recapitalize / _strip_fillers), which forked this exact
+// algorithm and then fixed it: capitalisation now happens only at the point
+// a filler was removed (via a marker character) instead of after every
+// sentence-ending punctuation mark in the whole text, and hyphenated words
+// like "uh-huh" / "uh-oh" survive.
 const FILLER_WORD = "(?:uh+|um+|yyy+|eee+|mmm+)";
-const FILLER_RE = new RegExp(`\\s*,?\\s*\\b${FILLER_WORD}\\b[,.]?\\s*`, "gi");
-const LEADING_FILLER_RE = new RegExp(`^\\s*,?\\s*\\b${FILLER_WORD}\\b`, "i");
-const POST_SENTENCE_CAP_RE = /([.!?]\s+)(\p{Ll})/gu;
+const SENTENCE_END = ".!?";
+// Hyphens are excluded on both sides so "uh-huh" and "uh-oh" — words, not
+// hesitation — survive. The guards spell out Unicode letters because \w is
+// ASCII-only in JS even with the u flag, and "umówmy" or "tłum" would be
+// cut at the ó / ł. The trailing class absorbs whatever punctuation the
+// speaker's pause collected; replaceFiller decides what to give back.
+// Horizontal whitespace only ([^\S\n]): a bare \s* would swallow the
+// newlines around a filler and silently merge the speaker's paragraphs.
+const FILLER_RE = new RegExp(
+  `[^\\S\\n]*,?[^\\S\\n]*(?<![\\p{L}\\p{N}_-])${FILLER_WORD}(?![\\p{L}\\p{N}_-])[,.!?;:…]*[^\\S\\n]*`,
+  "giu"
+);
+// Marks each point where a filler was removed, so capitalisation is applied
+// only there. A blanket "capitalise after .!?" pass would also rewrite
+// "e.g. the thing" and "1. first" in transcripts containing no filler at all.
+const MARK = "\u0000";
+
+const isSentenceEnd = (ch) => SENTENCE_END.includes(ch);
+
+// Drop the filler, giving back a sentence boundary that was really a clause's.
+// The trailing character class eats the punctuation after a filler. That is
+// right when the filler was its own sentence ("really? Uh. Maybe so.") or
+// when the run is a hesitation ellipsis ("So um... yeah"), and wrong when a
+// single sentence-ender belonged to the clause before it ("I think, uh. Let
+// me check.") — there the period has to survive.
+function replaceFiller(match, offset, fullText) {
+  const swallowed = [...match].filter(isSentenceEnd);
+  const isEllipsis = swallowed.length > 1;
+  if (swallowed.length > 0 && !isEllipsis && offset + match.length < fullText.length) {
+    const before = fullText.slice(0, offset).trimEnd();
+    const standalone = before === "" || isSentenceEnd(before[before.length - 1]);
+    if (!standalone) return `${swallowed[0]} ${MARK}`;
+  }
+  return ` ${MARK}`;
+}
+
+// Upper-case the first letter after each removed filler that starts a sentence.
+function recapitalize(text) {
+  const chars = [...text];
+  for (let index = 0; index < chars.length; index++) {
+    if (chars[index] !== MARK) continue;
+    let after = index + 1;
+    while (after < chars.length && /\s/u.test(chars[after])) after++;
+    if (after >= chars.length || !/\p{Ll}/u.test(chars[after])) continue;
+    let before = index - 1;
+    while (before >= 0 && (/\s/u.test(chars[before]) || chars[before] === MARK)) before--;
+    if (before < 0 || isSentenceEnd(chars[before])) {
+      chars[after] = chars[after].toUpperCase();
+    }
+  }
+  return chars.join("");
+}
 
 function removeFillers(text) {
-  const hadLeadingFiller = LEADING_FILLER_RE.test(text);
-  let result = text.replace(FILLER_RE, (match, offset, fullText) => {
-    // Preserve sentence-ending periods consumed by [,.]? in the regex.
-    // "word, uh. Next" → ". " (period is sentence boundary)
-    // "OK. Uh. Next"   → " "  (filler is standalone sentence)
-    if (match.includes(".")) {
-      const moreTextAfter = offset + match.length < fullText.length;
-      if (moreTextAfter) {
-        const textBeforeMatch = fullText.slice(0, offset).trimEnd();
-        const isStandaloneFiller = textBeforeMatch === "" || /[.!?]$/.test(textBeforeMatch);
-        if (!isStandaloneFiller) return ". ";
-      }
-    }
-    return " ";
-  });
-  result = result.replace(/  +/g, " ").trim();
-  result = result.replace(POST_SENTENCE_CAP_RE, (_, punct, letter) => punct + letter.toUpperCase());
-  if (hadLeadingFiller) {
-    result = result.replace(/^\p{Ll}/u, (c) => c.toUpperCase());
-  }
-  return result;
+  let result = text.replaceAll(MARK, "").replace(FILLER_RE, replaceFiller);
+  result = recapitalize(result).replaceAll(MARK, "");
+  result = result.replace(/[^\S\n]{2,}/g, " ");
+  result = result.replace(/[^\S\n]+(?=\n)/g, "");
+  return result.trim();
 }
 
 class SonioxStreaming {
