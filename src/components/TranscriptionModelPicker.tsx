@@ -282,7 +282,7 @@ interface ProviderCredentialField {
   input: "secret" | "text" | "select";
   labelKey?: string;
   placeholder?: string;
-  options?: Array<{ value: string; label: string }>;
+  options?: Array<{ value: string; label?: string; labelKey?: string }>;
 }
 
 const PROVIDER_CREDENTIALS: Record<
@@ -352,8 +352,10 @@ const PROVIDER_CREDENTIALS: Record<
         input: "select",
         labelKey: "transcription.soniox.region",
         options: [
-          { value: "us", label: "US" },
-          { value: "eu", label: "EU" },
+          { value: "us", labelKey: "transcription.soniox.regions.us" },
+          { value: "eu", labelKey: "transcription.soniox.regions.eu" },
+          { value: "jp", labelKey: "transcription.soniox.regions.jp" },
+          { value: "in", labelKey: "transcription.soniox.regions.in" },
         ],
       },
     ],
@@ -1409,7 +1411,7 @@ export default function TranscriptionModelPicker({
                           <SelectContent>
                             {field.options?.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
-                                {option.label}
+                                {option.labelKey ? t(option.labelKey) : option.label}
                               </SelectItem>
                             ))}
                           </SelectContent>

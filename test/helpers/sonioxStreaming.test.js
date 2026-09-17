@@ -227,6 +227,38 @@ describe("buildWebSocketUrl", () => {
     );
   });
 
+  it("resolves the Japan endpoint for region jp", () => {
+    const streaming = new SonioxStreaming();
+    assert.equal(
+      streaming.buildWebSocketUrl({ region: "jp" }),
+      "wss://stt-rt.jp.soniox.com/transcribe-websocket"
+    );
+  });
+
+  it("resolves the India endpoint for region in", () => {
+    const streaming = new SonioxStreaming();
+    assert.equal(
+      streaming.buildWebSocketUrl({ region: "in" }),
+      "wss://stt-rt.in.soniox.com/transcribe-websocket"
+    );
+  });
+
+  it("falls back to the US endpoint for an unknown region", () => {
+    const streaming = new SonioxStreaming();
+    assert.equal(
+      streaming.buildWebSocketUrl({ region: "xx" }),
+      "wss://stt-rt.soniox.com/transcribe-websocket"
+    );
+  });
+
+  it("treats an Object.prototype key as an unknown region, not a host", () => {
+    const streaming = new SonioxStreaming();
+    assert.equal(
+      streaming.buildWebSocketUrl({ region: "constructor" }),
+      "wss://stt-rt.soniox.com/transcribe-websocket"
+    );
+  });
+
   it("SONIOX_WS_URL overrides the region select entirely", () => {
     const streaming = new SonioxStreaming();
     const prev = process.env.SONIOX_WS_URL;
@@ -298,6 +330,42 @@ describe("warm connection promotion (loopback)", () => {
       try {
         await streaming.warmup({ apiKey: "k", mode: "byok", region: "us" });
         await streaming.connect({ apiKey: "k", mode: "byok", region: "eu" });
+        await wait(20);
+
+        assert.equal(connections.length, 2, "a second, cold socket was opened");
+        assert.equal(connections[0].closed, true, "the mismatched warm socket was closed");
+        assert.equal(streaming.isConnected, true);
+        assert.equal(streaming.hasWarmConnection(), false);
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+
+  it("reuses the warm socket when region is undefined and the session requests us (same normalized region)", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      try {
+        await streaming.warmup({ apiKey: "k", mode: "byok" });
+        await streaming.connect({ apiKey: "k", mode: "byok", region: "us" });
+        await wait(20);
+
+        assert.equal(connections.length, 1, "the warm socket was reused, not a second one opened");
+        assert.equal(streaming.isConnected, true);
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+
+  it("cold-starts when region is undefined but the session requests jp (different normalized region)", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      try {
+        await streaming.warmup({ apiKey: "k", mode: "byok" });
+        await streaming.connect({ apiKey: "k", mode: "byok", region: "jp" });
         await wait(20);
 
         assert.equal(connections.length, 2, "a second, cold socket was opened");

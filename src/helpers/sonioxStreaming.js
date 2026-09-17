@@ -6,12 +6,22 @@ const DISCONNECT_TIMEOUT_MS = 3000;
 const KEEPALIVE_INTERVAL_MS = 5000;
 const KEEPALIVE_IDLE_LIMIT_MS = 30000; // Stop keepalive if no audio sent for 30s
 const COLD_START_BUFFER_MAX = 3 * 16000 * 2; // 3 seconds of 16-bit PCM at 16kHz
-const SONIOX_DEFAULT_BASE_URL = "wss://stt-rt.soniox.com";
-const SONIOX_EU_BASE_URL = "wss://stt-rt.eu.soniox.com";
+// Data residency regions from Soniox's docs (US, EU, Japan, India).
+const SONIOX_REGION_HOSTS = {
+  us: "stt-rt.soniox.com",
+  eu: "stt-rt.eu.soniox.com",
+  jp: "stt-rt.jp.soniox.com",
+  in: "stt-rt.in.soniox.com",
+};
+const SONIOX_REGIONS = Object.keys(SONIOX_REGION_HOSTS);
 const SONIOX_WS_PATH = "/transcribe-websocket";
 const DEFAULT_MODEL = "stt-rt-v5";
 
 const toBaseLanguage = (l) => (l && l !== "auto" ? l.split("-")[0] : null);
+
+// An unknown or empty region (stale setting, another provider's value) falls
+// back to US rather than being sent as-is.
+const resolveRegion = (region) => (Object.hasOwn(SONIOX_REGION_HOSTS, region) ? region : "us");
 
 // A model that isn't a Soniox realtime model (e.g. a stale value imported from
 // another provider) falls back to the default rather than being sent as-is —
@@ -46,7 +56,7 @@ const warmIdentity = (options) =>
     options.language || null,
     options.secondaryLanguage || null,
     options.sampleRate || 16000,
-    options.region === "eu" ? "eu" : "us",
+    resolveRegion(options.region),
     (options.keyterms || []).filter(Boolean),
   ]);
 
@@ -123,13 +133,13 @@ class SonioxStreaming {
   buildWebSocketUrl(options = {}) {
     if (process.env.SONIOX_WS_URL) {
       debugLogger.info("Soniox region select ignored: SONIOX_WS_URL override active", {
-        region: options.region || "us",
+        region: resolveRegion(options.region),
         url: process.env.SONIOX_WS_URL,
       });
       return process.env.SONIOX_WS_URL;
     }
-    const base = options.region === "eu" ? SONIOX_EU_BASE_URL : SONIOX_DEFAULT_BASE_URL;
-    return base + SONIOX_WS_PATH;
+    const host = SONIOX_REGION_HOSTS[resolveRegion(options.region)];
+    return `wss://${host}${SONIOX_WS_PATH}`;
   }
 
   async connect(options = {}) {
@@ -687,3 +697,4 @@ module.exports = SonioxStreaming;
 module.exports.removeFillers = removeFillers;
 module.exports.buildConfigMessage = buildConfigMessage;
 module.exports.DEFAULT_MODEL = DEFAULT_MODEL;
+module.exports.SONIOX_REGIONS = SONIOX_REGIONS;
