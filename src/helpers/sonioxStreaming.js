@@ -104,6 +104,7 @@ class SonioxStreaming {
     this.onFinalTranscript = null;
     this.onError = null;
     this.onSessionEnd = null;
+    this.onFinalized = null;
     this.pendingResolve = null;
     this.pendingReject = null;
     this.connectionTimeout = null;
@@ -253,9 +254,11 @@ class SonioxStreaming {
 
       let nonFinalTexts = [];
       let newFinalTokens = false;
+      let finalized = false;
       const isValidToken = (t) =>
         t.text && t.text !== "<fin>" && t.text !== "<end>" && t.text !== "�";
       for (const token of res.tokens || []) {
+        if (token.text === "<fin>") finalized = true;
         if (!isValidToken(token)) continue;
         if (token.is_final) {
           this.finalTokens.push(token);
@@ -272,6 +275,11 @@ class SonioxStreaming {
 
       if (newFinalTokens) {
         this.onFinalTranscript?.(removeFillers(rawFinal));
+      }
+      // <fin> closes a finalize: every token for the audio sent before it has
+      // already arrived as final, so the stop path can move on without a timer.
+      if (finalized) {
+        this.onFinalized?.();
       }
     } catch (err) {
       debugLogger.error("Soniox message parse error", { error: err.message });

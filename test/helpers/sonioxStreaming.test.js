@@ -455,6 +455,25 @@ describe("message handling (loopback)", () => {
     assert.equal(finalTexts.at(-1), "Hello world");
   });
 
+  it("reports the <fin> marker after the finals it closes", () => {
+    const streaming = new SonioxStreaming();
+    const events = [];
+    streaming.onFinalTranscript = (text) => events.push(["final", text]);
+    streaming.onFinalized = () => events.push(["finalized"]);
+
+    streaming.handleMessage(JSON.stringify({ tokens: [{ text: "Hi", is_final: true }] }));
+    streaming.handleMessage(
+      JSON.stringify({
+        tokens: [
+          { text: " there", is_final: true },
+          { text: "<fin>", is_final: true },
+        ],
+      })
+    );
+
+    assert.deepEqual(events, [["final", "Hi"], ["final", "Hi there"], ["finalized"]]);
+  });
+
   it("finalize + drain returns a trimmed transcript", async () => {
     await withSonioxServer(async (url, connections) => {
       const streaming = new SonioxStreaming();
