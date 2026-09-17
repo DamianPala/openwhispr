@@ -5948,6 +5948,9 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this.streamingCleanupFns = [];
     this.streamingFinalText = "";
     this.streamingPartialText = "";
+    // No listener can move the transcript any more, so a pending settle wait
+    // (a cancel that lands mid-finalize) resolves now instead of at its ceiling.
+    this.streamingFinalizedSettle?.();
     this.streamingTextBump = null;
     clearTimeout(this.streamingTextDebounce);
     this.streamingTextDebounce = null;
