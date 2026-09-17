@@ -158,11 +158,13 @@ export const useAudioRecording = (toast, options = {}) => {
         // still the user's actual editing target here. Refresh it for recordings
         // started from the panel itself as well as from global hotkeys; otherwise
         // paste can reactivate a stale target from the preceding dictation.
-        try {
-          await window.electronAPI.captureDictationTarget?.();
-        } catch (error) {
+        // Not awaited: the Wayland AT-SPI probe walks every registered app and
+        // takes 1-2 s with a browser focused, and every consumer of the target
+        // (selection capture, Windows paste restore) already waits for the
+        // in-flight probe itself.
+        window.electronAPI.captureDictationTarget?.()?.catch?.((error) => {
           logger.warn("Failed to refresh dictation target", { error: error?.message });
-        }
+        });
 
         demoKindRef.current = getOnboardingDemoKind(voiceAgentRequested);
         audioManagerRef.current.setVoiceAgentRequested(voiceAgentRequested);

@@ -1523,8 +1523,11 @@ class IPCHandlers {
     });
 
     ipcMain.handle("capture-dictation-target", async () => {
+      // Both probes start on the same tick so a stop that lands right after the
+      // start sees the in-flight target probe rather than the previous one.
+      const targetProbe = this.selectionManager?.captureTarget?.();
       const pid = (await this.textEditMonitor?.captureTargetPid?.()) ?? null;
-      await this.selectionManager?.captureTarget?.();
+      await targetProbe;
       return { success: true, pid };
     });
 
@@ -5636,10 +5639,13 @@ class IPCHandlers {
       // A failed rect read falls back to the cursor rather than rejecting: the
       // policy branch below can abandon this promise, and capture's contract is
       // to yield null, never to throw.
-      const targetPid = this.textEditMonitor?.lastTargetPid;
-      const capturePromise = Promise.resolve(
-        targetPid ? this.textEditMonitor.getTargetWindowBounds?.(targetPid) : null
-      )
+      // The press-time PID probe may still be in flight on macOS; joining it
+      // is a shared promise or a fresh cache, not a new osascript spawn.
+      const capturePromise = Promise.resolve(this.textEditMonitor?.captureTargetPid?.())
+        .then((pid) => pid ?? this.textEditMonitor?.lastTargetPid)
+        .then((targetPid) =>
+          targetPid ? this.textEditMonitor.getTargetWindowBounds?.(targetPid) : null
+        )
         .catch(() => null)
         .then((targetBounds) => screenContextCapture.captureActiveDisplay(targetBounds));
       const authHeaders = await getAuthHeader(event);

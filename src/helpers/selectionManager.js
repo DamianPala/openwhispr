@@ -152,6 +152,15 @@ class SelectionManager {
     return this.lastTarget?.kind === "win-hwnd" ? this.lastTarget : null;
   }
 
+  // The press-time PID probe is not awaited by the hotkey path and nulls
+  // lastTargetPid until the osascript read lands, so join the in-flight
+  // lookup (or its fresh cache) instead of reading the field directly.
+  async _getMacTarget() {
+    const pid =
+      (await this.textEditMonitor?.captureTargetPid?.()) ?? this.textEditMonitor?.lastTargetPid;
+    return pid ? { kind: "mac-pid", pid } : null;
+  }
+
   async captureSelectedText(options = {}) {
     // The caller knows whether a caret capture could ever be used (auto-paste
     // on); without it the probe's binary spawn would be pure waste.
@@ -167,9 +176,7 @@ class SelectionManager {
       }
       this._pruneSessions();
       const expectedTarget =
-        this.platform === "darwin" && this.textEditMonitor?.lastTargetPid
-          ? { kind: "mac-pid", pid: this.textEditMonitor.lastTargetPid }
-          : this.lastTarget;
+        this.platform === "darwin" ? await this._getMacTarget() : this.lastTarget;
       if (!expectedTarget) {
         return { status: "unavailable", code: "target_unavailable" };
       }
