@@ -10901,9 +10901,6 @@ class IPCHandlers {
 
     let sonioxStreamingStartInProgress = false;
     let sonioxSendDropCount = 0;
-    // One handshake at a time — a start racing an in-flight connect awaits it
-    // instead of opening a second socket and losing track of the first.
-    let sonioxConnectInFlight = null;
 
     // Re-bound on every warmup/start so a warm socket promoted by a different
     // window can never emit into the window that opened it.
@@ -10925,18 +10922,6 @@ class IPCHandlers {
     };
 
     const SONIOX_TOKEN_OPTIONS = { mode: "byok", provider: "soniox-realtime" };
-
-    const connectSonioxStreaming = (event, options) => {
-      if (sonioxConnectInFlight) return sonioxConnectInFlight;
-      sonioxConnectInFlight = (async () => {
-        const streaming = ensureSonioxStreaming(event);
-        const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
-        await streaming.connect({ ...options, apiKey });
-      })().finally(() => {
-        sonioxConnectInFlight = null;
-      });
-      return sonioxConnectInFlight;
-    };
 
     ipcMain.handle("soniox-streaming-warmup", async (event, options = {}) => {
       try {
@@ -10967,13 +10952,16 @@ class IPCHandlers {
       sonioxStreamingStartInProgress = true;
       try {
         const streaming = ensureSonioxStreaming(event);
-        if (sonioxConnectInFlight) await sonioxConnectInFlight;
         if (streaming.isConnected) await streaming.disconnect(false);
-        const usedWarmConnection = streaming.hasWarmConnection();
-        await connectSonioxStreaming(event, options);
+        const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
+        const { promoted } = await streaming.connect({ ...options, apiKey });
         sonioxSendDropCount = 0;
-        debugLogger.debug("Soniox streaming started", { usedWarmConnection }, "streaming");
-        return { success: true, usedWarmConnection };
+        debugLogger.debug(
+          "Soniox streaming started",
+          { usedWarmConnection: promoted },
+          "streaming"
+        );
+        return { success: true, usedWarmConnection: promoted };
       } catch (error) {
         debugLogger.error("Soniox streaming start error", { error: error.message });
         return streamingStartFailure(error);
@@ -11013,7 +11001,12 @@ class IPCHandlers {
     });
 
     ipcMain.on("soniox-streaming-finalize", () => {
-      this.sonioxStreaming?.finalize();
+      // No open socket: finalize() sends nothing and returns false, so the
+      // server's <fin> the renderer's settle wait expects will never arrive —
+      // fire onFinalized directly instead of letting it run to its ceiling.
+      if (this.sonioxStreaming?.finalize() === false) {
+        this.sonioxStreaming?.onFinalized?.();
+      }
     });
 
     ipcMain.handle("soniox-streaming-stop", async () => {

@@ -1,9 +1,16 @@
-const { describe, it } = require("node:test");
+const { describe, it, mock } = require("node:test");
 const assert = require("node:assert/strict");
-const { WebSocketServer } = require("ws");
+const net = require("node:net");
+const { WebSocketServer, WebSocket } = require("ws");
 const SonioxStreaming = require("../../src/helpers/sonioxStreaming");
+const debugLogger = require("../../src/helpers/debugLogger");
 
 const { removeFillers, buildConfigMessage, DEFAULT_MODEL } = SonioxStreaming;
+
+// Mirrors sonioxStreaming.js's own keep-alive constants (not exported: they're
+// internal tuning, not part of the module's public contract).
+const KEEPALIVE_INTERVAL_MS_FOR_TEST = 5000;
+const KEEPALIVE_IDLE_LIMIT_MS_FOR_TEST = 30000;
 
 describe("removeFillers", () => {
   it("passes through normal text unchanged", () => {
@@ -217,6 +224,19 @@ describe("removeFillers", () => {
     assert.ok(Date.now() - start < 2000);
   });
 
+  // Regression guard for the ambiguous `[^\S\n]*,?[^\S\n]*` prefix: a long
+  // horizontal-whitespace run with no filler after it used to backtrack
+  // cubically (tens of seconds at 5000 spaces; a filler right after the run
+  // matches on the first attempt and never exercised it). The fix makes the
+  // comma's whitespace its own optional group.
+  it("handles a long whitespace run with no trailing filler without cubic backtracking", () => {
+    const start = Date.now();
+    const result = removeFillers("a" + " ".repeat(5000) + "b");
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 500, `expected well under 500ms, took ${elapsed}ms`);
+    assert.equal(result, "a b");
+  });
+
   // Polish abbreviations are not sentence boundaries
 
   it("does not capitalize after a Polish abbreviation with no filler removed", () => {
@@ -364,6 +384,42 @@ describe("buildWebSocketUrl", () => {
       else process.env.SONIOX_WS_URL = prev;
     }
   });
+
+  // wss: is accepted for any host; ws: only for a host that never leaves the
+  // machine or the LAN; credentials in the URL are refused regardless of
+  // scheme; an unparseable value is refused the same way. Every refusal falls
+  // back to the region host and logs exactly one warning (host only, never
+  // the URL, which could carry the credentials it was refused for).
+  const wsUrlCases = [
+    { value: "ws://203.0.113.5/x", accepted: false, reason: "public host over ws:" },
+    { value: "ws://127.0.0.1:1234/x", accepted: true, reason: "loopback host over ws:" },
+    { value: "ws://10.0.0.7/x", accepted: true, reason: "private host over ws:" },
+    { value: "wss://u:p@host/x", accepted: false, reason: "credentials in the URL" },
+    { value: "not a url", accepted: false, reason: "unparseable value" },
+  ];
+
+  for (const { value, accepted, reason } of wsUrlCases) {
+    it(`${accepted ? "accepts" : "falls back to the region host for"}: ${reason}`, () => {
+      const streaming = new SonioxStreaming();
+      const prevUrl = process.env.SONIOX_WS_URL;
+      process.env.SONIOX_WS_URL = value;
+      const warnMock = mock.method(debugLogger, "warn", () => {});
+      try {
+        const url = streaming.buildWebSocketUrl({});
+        if (accepted) {
+          assert.equal(url, value);
+          assert.equal(warnMock.mock.callCount(), 0);
+        } else {
+          assert.equal(url, "wss://stt-rt.soniox.com/transcribe-websocket");
+          assert.equal(warnMock.mock.callCount(), 1);
+        }
+      } finally {
+        warnMock.mock.restore();
+        if (prevUrl === undefined) delete process.env.SONIOX_WS_URL;
+        else process.env.SONIOX_WS_URL = prevUrl;
+      }
+    });
+  }
 });
 
 // Loopback Soniox: connect()/warmup() resolve on the socket opening, so the
@@ -689,25 +745,271 @@ describe("message handling (loopback)", () => {
         socket.on("message", (data, isBinary) => {
           if (isBinary) return; // raw PCM audio frame, not a control message
           const text = data.toString();
-          if (text === "") {
-            socket.send(JSON.stringify({ finished: true }));
-            return;
-          }
+          if (text === "") return; // end-of-audio marker; no reply needed
           const msg = JSON.parse(text);
           if (msg.type === "finalize") {
-            socket.send(JSON.stringify({ tokens: [{ text: "  Hello world  ", is_final: true }] }));
+            socket.send(
+              JSON.stringify({
+                tokens: [
+                  { text: "  Hello world  ", is_final: true },
+                  { text: "<fin>", is_final: true },
+                ],
+              })
+            );
           }
         });
 
-        streaming.sendAudio(Buffer.alloc(10));
-        await wait(20);
+        // disconnect() waits for <fin> through a wrapper around onFinalized;
+        // the callback underneath (the IPC emit in production) must still fire
+        // once and be restored, or the renderer's settle wait runs to its ceiling.
+        let finalizedCalls = 0;
+        const onFinalized = () => finalizedCalls++;
+        streaming.onFinalized = onFinalized;
 
+        streaming.sendAudio(Buffer.alloc(10));
         const result = await streaming.disconnect(true);
         assert.equal(result.text, "Hello world");
+        assert.equal(finalizedCalls, 1);
+        assert.equal(streaming.onFinalized, onFinalized);
       } finally {
         streaming.cleanupAll();
       }
     });
+  });
+
+  it("a clean server close mid-session notifies onSessionEnd then onError once, and sendAudio then returns false", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      const events = [];
+      streaming.onSessionEnd = () => events.push("sessionEnd");
+      streaming.onError = () => events.push("error");
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        const clientWs = streaming.ws;
+        const closed = new Promise((resolve) => clientWs.once("close", resolve));
+        connections[0].socket.close(1000);
+        await closed;
+
+        assert.deepEqual(events, ["sessionEnd", "error"]);
+        assert.equal(streaming.sendAudio(Buffer.from("x")), false);
+
+        // A stray error on the now-superseded socket must not notify again —
+        // the stale guard in attachSessionHandlers (backed by
+        // connectionLossNotified) drops it.
+        clientWs.emit("error", new Error("late, stale error"));
+        assert.deepEqual(events, ["sessionEnd", "error"]);
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+
+  it("<fin>-only reply lets disconnect(true) return promptly without waiting for finished", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        const socket = connections[0].socket;
+        // disconnect() sends the end-of-audio marker and closes without
+        // waiting for the server to acknowledge it, so the assertions below
+        // wait for the server to actually observe it rather than trusting
+        // that disconnect() having resolved means the frame has arrived.
+        const markerReceived = new Promise((resolve) => {
+          socket.on("message", (data, isBinary) => {
+            if (isBinary) return;
+            const text = data.toString();
+            if (text === "") {
+              resolve();
+              return; // end-of-audio marker; the server never answers with "finished"
+            }
+            const msg = JSON.parse(text);
+            if (msg.type === "finalize") {
+              socket.send(
+                JSON.stringify({
+                  tokens: [
+                    { text: "hello", is_final: true },
+                    { text: "<fin>", is_final: true },
+                  ],
+                })
+              );
+            }
+          });
+        });
+
+        streaming.sendAudio(Buffer.alloc(10));
+        streaming.finalize();
+        const start = Date.now();
+        const result = await streaming.disconnect(true);
+        const elapsed = Date.now() - start;
+        await markerReceived;
+
+        assert.ok(elapsed < 1000, `expected well under DISCONNECT_TIMEOUT_MS, took ${elapsed}ms`);
+        assert.equal(result.text, "hello");
+        const textFrames = connections[0].messages.filter((m) => {
+          if (m === "") return true;
+          try {
+            JSON.parse(m);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        assert.equal(textFrames.length, 3, "config, finalize, and the end-of-audio marker only");
+        assert.equal(textFrames[2], "");
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+
+  it("disconnect(true) sends finalize itself, waits for <fin>, then the end-of-audio marker, when the caller never called finalize()", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        const socket = connections[0].socket;
+        // connections[0].messages (populated by withSonioxServer's own
+        // listener, attached at connection time) is used for the assertions
+        // below instead of a listener added here: the config message can
+        // still be in flight to the server when this test's setup runs, and
+        // a listener added late could race that delivery.
+        const markerReceived = new Promise((resolve) => {
+          socket.on("message", (data, isBinary) => {
+            if (isBinary) return;
+            const text = data.toString();
+            if (text === "") {
+              resolve();
+              return;
+            }
+            const msg = JSON.parse(text);
+            if (msg.type === "finalize") {
+              socket.send(
+                JSON.stringify({
+                  tokens: [
+                    { text: "done", is_final: true },
+                    { text: "<fin>", is_final: true },
+                  ],
+                })
+              );
+            }
+          });
+        });
+
+        streaming.sendAudio(Buffer.alloc(10));
+        const result = await streaming.disconnect(true);
+        await markerReceived;
+
+        const textFrames = connections[0].messages.filter((m) => {
+          if (m === "") return true;
+          try {
+            JSON.parse(m);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        assert.equal(textFrames.length, 3, "config, finalize, and the end-of-audio marker only");
+        assert.equal(JSON.parse(textFrames[1]).type, "finalize");
+        assert.equal(textFrames[2], "");
+        assert.equal(result.text, "done");
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+
+  it("closes on the keep-alive idle timeout: onSessionEnd then onError", async () => {
+    await withSonioxServer(async (url) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      const events = [];
+      streaming.onSessionEnd = () => events.push("sessionEnd");
+      streaming.onError = () => events.push("error");
+      mock.timers.enable({ apis: ["setInterval", "Date"] });
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        mock.timers.tick(KEEPALIVE_IDLE_LIMIT_MS_FOR_TEST + KEEPALIVE_INTERVAL_MS_FOR_TEST);
+        assert.deepEqual(events, ["sessionEnd", "error"]);
+      } finally {
+        mock.timers.reset();
+        streaming.cleanupAll();
+      }
+    });
+  });
+});
+
+describe("connect lifecycle (loopback)", () => {
+  it("disconnect() while CONNECTING rejects connect() and leaves no timer running", async () => {
+    // A raw TCP server that accepts the connection but never completes the
+    // WebSocket upgrade, so the client socket stays in CONNECTING.
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    const streaming = new SonioxStreaming();
+    streaming.buildWebSocketUrl = () => `ws://127.0.0.1:${port}/transcribe-websocket`;
+    try {
+      const connectPromise = streaming.connect({ apiKey: "k", mode: "byok" });
+      assert.equal(streaming.ws?.readyState, WebSocket.CONNECTING);
+
+      const disconnectPromise = streaming.disconnect(true);
+      await assert.rejects(connectPromise);
+      await disconnectPromise;
+
+      assert.equal(streaming.connectionTimeout, null);
+    } finally {
+      streaming.cleanupAll();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("two connect() calls before open share one socket and both promises resolve", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      try {
+        const p1 = streaming.connect({ apiKey: "k", mode: "byok" });
+        const p2 = streaming.connect({ apiKey: "k", mode: "byok" });
+        const [r1, r2] = await Promise.all([p1, p2]);
+
+        assert.deepEqual(r1, { promoted: false });
+        assert.deepEqual(r2, { promoted: false });
+        assert.equal(connections.length, 1, "only one socket was opened");
+        assert.equal(streaming.isConnected, true);
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+
+  it("connect() reports whether it promoted a warm socket", async () => {
+    await withSonioxServer(async (url) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      const options = { apiKey: "k", mode: "byok" };
+      try {
+        const cold = await streaming.connect(options);
+        assert.deepEqual(cold, { promoted: false });
+        await streaming.disconnect(false);
+
+        await streaming.warmup(options);
+        const warm = await streaming.connect(options);
+        assert.deepEqual(warm, { promoted: true });
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+});
+
+describe("finalize", () => {
+  it("returns false when there is no open socket", () => {
+    const streaming = new SonioxStreaming();
+    assert.equal(streaming.finalize(), false);
   });
 });
 
