@@ -544,6 +544,39 @@ describe("message handling (loopback)", () => {
     assert.deepEqual(events, [["final", "Hi"], ["final", "Hi there"], ["finalized"]]);
   });
 
+  it("emits the committed text as final and only the non-final tail as partial", () => {
+    const streaming = new SonioxStreaming();
+    const events = [];
+    streaming.onPartialTranscript = (text) => events.push(["partial", text]);
+    streaming.onFinalTranscript = (text) => events.push(["final", text]);
+
+    streaming.handleMessage(
+      JSON.stringify({
+        tokens: [
+          { text: "Hello", is_final: false },
+          { text: " wor", is_final: false },
+        ],
+      })
+    );
+    streaming.handleMessage(
+      JSON.stringify({
+        tokens: [
+          { text: "Hello", is_final: true },
+          { text: " world", is_final: false },
+          { text: " how", is_final: false },
+        ],
+      })
+    );
+
+    // The consumer shows `final + " " + partial`; a partial that repeated the
+    // committed text would render "Hello Hello world how" in the live preview.
+    assert.deepEqual(events, [
+      ["partial", "Hello wor"],
+      ["final", "Hello"],
+      ["partial", "world how"],
+    ]);
+  });
+
   it("finalize + drain returns a trimmed transcript", async () => {
     await withSonioxServer(async (url, connections) => {
       const streaming = new SonioxStreaming();
