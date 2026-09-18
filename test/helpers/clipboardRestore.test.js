@@ -1372,3 +1372,52 @@ test("_detectKdeWindowClassAsync spawns kdotool once for both subcommands", asyn
   assert.equal(spawnCalls[0].command, "kdotool");
   assert.deepEqual(spawnCalls[0].args, ["getactivewindow", "getwindowclassname"]);
 });
+
+// KWin has no data-control protocol, so wl-copy/wl-paste take keyboard focus
+// to touch a selection; a paste keystroke right after that lands nowhere.
+test("KDE mirrors the primary selection through X11 tools, never wl-clipboard", async () => {
+  const syncCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = []) => {
+      syncCalls.push({ command, args });
+      return { status: 0, stdout: Buffer.from("previous") };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+
+  await withWaylandEnvironment("KDE", async () => {
+    manager._writePrimarySelection("hello");
+    assert.equal(manager._readPrimarySelection(), "previous");
+  });
+
+  assert.deepEqual(
+    syncCalls.map(({ command, args }) => [command, ...args]),
+    [
+      ["xclip", "-selection", "primary"],
+      ["xclip", "-selection", "primary", "-o"],
+    ]
+  );
+});
+
+test("other Wayland desktops keep wl-clipboard first for the primary selection", async () => {
+  const syncCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = []) => {
+      syncCalls.push({ command, args });
+      return { status: 0, stdout: Buffer.from("") };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+
+  await withWaylandEnvironment("GNOME", async () => {
+    manager._writePrimarySelection("hello");
+    manager._readPrimarySelection();
+  });
+
+  assert.deepEqual(
+    syncCalls.map(({ command }) => command),
+    ["wl-copy", "wl-paste"]
+  );
+});
