@@ -4,6 +4,7 @@ const { createRendererServer, installBrowserGlobals } = require("../lib/renderer
 
 const QUIET_MS = 250;
 const CEILING_MS = 2000;
+const FLUSH_CEILING_MS = 120;
 // setTimeout schedules on the monotonic clock and can fire while the Date.now()
 // delta is still ~1ms short of the nominal delay, so lower bounds need slack.
 const TIMER_SLACK_MS = 50;
@@ -170,4 +171,80 @@ test("a cancel during finalize joins the in-flight stop; the provider is stopped
   assert.deepEqual(stopModes, ["finalize"], `provider.stop() modes: ${stopModes}`);
   assert.equal(manager._streamingStopPromise, null);
   assert.equal(manager._streamingStopMode, null);
+});
+
+// Shared scaffolding for the flush-sentinel tests below: enough state for
+// stopStreamingRecording()'s finalize path to run to completion with no
+// transcript, real reasoning or IPC. awaitStreamingTextSettled is stubbed out
+// because that wait is covered by the tests above; these two isolate the
+// flush-ceiling race in step 2 of _finalizeStreamingRecording.
+function primeFinalizingManager(manager, processor) {
+  Object.assign(manager, {
+    _streamingCancellationGeneration: 0,
+    _activeStreamingSessionId: "session-1",
+    _streamingStopPromise: null,
+    _streamingStopMode: null,
+    _streamingMicSwapPromise: null,
+    isStreaming: true,
+    isRecording: true,
+    isProcessing: false,
+    streamingStartInProgress: false,
+    recordingStartTime: Date.now(),
+    streamingCleanupFns: [],
+    streamingFallbackRecorder: null,
+    streamingFallbackChunks: [],
+    _streamingFallbackSegments: [],
+    streamingProcessor: processor,
+    micRecovery: { stop() {} },
+    cleanupStreamingAudio: () => {},
+    cleanupPreview: async () => {},
+    finishStreamingFallbackSegment: async () => null,
+    mergeRecordedSegments: async () => null,
+    getLargestRecordedSegment: () => null,
+    getStreamingProvider: () => ({
+      awaitsFinalTranscript: true,
+      stop: async () => ({ success: true }),
+    }),
+    awaitStreamingTextSettled: async () => {},
+    onStateChange: () => {},
+  });
+}
+
+test("a flushed sentinel lets the stop path continue before the ceiling", async (t) => {
+  const manager = await loadManager(t);
+  let disconnected = false;
+  const port = { onmessage: null };
+  // A real worklet posts "stop" then trails it with "flushed"; queueMicrotask
+  // stands in for that round trip without waiting on real audio hardware.
+  port.postMessage = (msg) => {
+    if (msg === "stop") queueMicrotask(() => port.onmessage?.({ data: "flushed" }));
+  };
+  const processor = {
+    port,
+    disconnect: () => {
+      disconnected = true;
+    },
+  };
+  primeFinalizingManager(manager, processor);
+  // Wired the same way startStreamingRecording wires the real handler, so the
+  // fake port's reply exercises the actual _streamingFlushResolve() call.
+  port.onmessage = (event) => {
+    if (event.data === "flushed") manager._streamingFlushResolve?.();
+  };
+
+  const ms = await elapsed(() => manager.stopStreamingRecording());
+
+  assert.ok(disconnected, "processor should have been disconnected");
+  assert.ok(ms < FLUSH_CEILING_MS - TIMER_SLACK_MS, `waited for the ceiling instead: ${ms}ms`);
+});
+
+test("the ceiling still fires when the sentinel never arrives", async (t) => {
+  const manager = await loadManager(t);
+  const processor = { port: { postMessage: () => {} }, disconnect: () => {} };
+  primeFinalizingManager(manager, processor);
+
+  const ms = await elapsed(() => manager.stopStreamingRecording());
+
+  assert.ok(ms >= FLUSH_CEILING_MS - TIMER_SLACK_MS, `gave up too early: ${ms}ms`);
+  assert.ok(ms < FLUSH_CEILING_MS + 300, `overran the ceiling: ${ms}ms`);
 });
