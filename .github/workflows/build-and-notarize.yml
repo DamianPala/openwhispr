@@ -2,7 +2,7 @@ name: Build and Notarize
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, daily]
     paths-ignore:
       - "**.md"
       - "LICENSE"
@@ -97,7 +97,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: resources/bin
-          key: linux-x64-bin-${{ hashFiles('scripts/download-*.js') }}
+          # Native helper sources are in the key so source changes cannot
+          # restore stale helper binaries from the cache.
+          key: linux-x64-bin-${{ hashFiles('scripts/download-*.js', 'scripts/build-linux-*.js', 'resources/linux-*.c') }}
 
       - name: Download whisper.cpp binaries
         run: node scripts/download-whisper-cpp.js --current
@@ -459,6 +461,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -476,23 +480,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          VERSION=$(ls release/*.AppImage | sed -E 's/.*OpenWhispr-([^-]+)-linux.*/\1/')
-          cat > notes.md <<EOF
-          OpenWhispr $VERSION with the Soniox realtime provider (bring your own key). Built from \`${GITHUB_SHA}\`.
-
-          These builds are not code-signed:
-          - **Windows** (\`OpenWhispr.Setup.$VERSION.exe\`, GitHub replaces the spaces in the installer's name): SmartScreen will warn; choose *More info* → *Run anyway*.
-          - **macOS** (\`OpenWhispr-$VERSION-arm64.dmg\` for Apple Silicon, \`OpenWhispr-$VERSION.dmg\` for Intel): after copying the app, run \`xattr -d com.apple.quarantine /Applications/OpenWhispr.app\` once.
-          - **Linux**: AppImage (any distro) or .deb (Debian/Ubuntu).
-
-          Linux, KDE Plasma on Wayland: pasting into Chrome, Brave, VS Code and other Chromium/Electron apps needs \`ydotool\` (KWin's fake-input path, which the portal uses, is ignored by them). Run \`sudo apt install ydotool && sudo usermod -aG input \$USER\`, then log out and back in; the \`ydotool.service\` user unit starts on login. Other apps work without it.
-
-          Soniox: paste your own API key in Settings and pick the region your key belongs to.
-          EOF
-          gh release create "$RELEASE_TAG" release/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --prerelease \
-            --title "OpenWhispr $VERSION (Soniox)" \
-            --notes-file notes.md
+        run: bash scripts/ci/publish-prerelease.sh
