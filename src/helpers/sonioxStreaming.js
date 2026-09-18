@@ -314,11 +314,12 @@ class SonioxStreaming {
       const rawFinal = this.finalTokens.map((t) => t.text).join("");
       this.currentNonFinalText = nonFinalTexts.join("");
 
-      this.onPartialTranscript?.(removeFillers(rawFinal + this.currentNonFinalText));
-
+      // Final first: the consumer appends the partial to its committed text, so
+      // the partial carries only the non-final tail and must follow the commit.
       if (newFinalTokens) {
         this.onFinalTranscript?.(removeFillers(rawFinal));
       }
+      this.onPartialTranscript?.(removeFillers(this.currentNonFinalText));
       // <fin> closes a finalize: every token for the audio sent before it has
       // already arrived as final, so the stop path can move on without a timer.
       if (finalized) {
