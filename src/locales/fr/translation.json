@@ -868,8 +868,12 @@
         "jp": "Japon",
         "in": "Inde"
       },
-      "secondaryLanguage": "Langue secondaire",
-      "secondaryLanguageNone": "Aucune",
+      "extraLanguages": "Langues supplémentaires",
+      "extraLanguagesAdd": "Ajouter",
+      "removeFillers": {
+        "label": "Supprimer les mots de remplissage",
+        "description": "Supprime \"um\", \"uh\", \"yyy\" avant que le texte soit collé."
+      },
       "keepAlive": {
         "label": "Maintien de connexion",
         "description": "Maintient la connexion active entre les enregistrements pour un démarrage instantané, moyennant un coût supplémentaire.",

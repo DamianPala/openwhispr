@@ -244,17 +244,41 @@ describe("buildConfigMessage", () => {
     assert.equal(buildConfigMessage({ apiKey: "k" }).context, undefined);
   });
 
-  it("builds language_hints from the base codes of language and secondaryLanguage", () => {
+  it("builds language_hints from the base code of language alone when there are no extras", () => {
+    assert.deepEqual(buildConfigMessage({ apiKey: "k", language: "pl" }).language_hints, ["pl"]);
+  });
+
+  it("builds language_hints with the main language first, then extras in order", () => {
     assert.deepEqual(
-      buildConfigMessage({ apiKey: "k", language: "pl", secondaryLanguage: "en-US" })
+      buildConfigMessage({ apiKey: "k", language: "pl", extraLanguages: ["en-US", "de"] })
         .language_hints,
-      ["pl", "en"]
+      ["pl", "en", "de"]
+    );
+  });
+
+  it("dedupes an extra that collapses to the same base as another extra or the main language", () => {
+    assert.deepEqual(
+      buildConfigMessage({
+        apiKey: "k",
+        language: "en",
+        extraLanguages: ["en-US", "de", "de-DE"],
+      }).language_hints,
+      ["en", "de"]
     );
   });
 
   it("drops 'auto' and missing languages from language_hints", () => {
     assert.deepEqual(buildConfigMessage({ apiKey: "k", language: "auto" }).language_hints, []);
     assert.deepEqual(buildConfigMessage({ apiKey: "k" }).language_hints, []);
+  });
+
+  // Matches the old secondaryLanguage behavior: toBaseLanguage(null) is null,
+  // so a missing main language doesn't block extras from becoming hints.
+  it("still hints from extras when the main language is unset", () => {
+    assert.deepEqual(
+      buildConfigMessage({ apiKey: "k", extraLanguages: ["pl", "auto"] }).language_hints,
+      ["pl"]
+    );
   });
 
   it("takes sample_rate from options, defaulting to 16000", () => {
@@ -274,10 +298,9 @@ describe("buildConfigMessage", () => {
     assert.equal(buildConfigMessage({ apiKey: "k", model: "stt-rt-v4" }).model, "stt-rt-v4");
   });
 
-  it("dedupes language_hints when the secondary language resolves to the same base as the primary", () => {
+  it("dedupes language_hints when an extra resolves to the same base as the primary", () => {
     assert.deepEqual(
-      buildConfigMessage({ apiKey: "k", language: "en", secondaryLanguage: "en-US" })
-        .language_hints,
+      buildConfigMessage({ apiKey: "k", language: "en", extraLanguages: ["en-US"] }).language_hints,
       ["en"]
     );
   });
@@ -465,6 +488,52 @@ describe("warm connection promotion (loopback)", () => {
       }
     });
   });
+
+  it("cold-starts when the extra languages differ from the warmed-up set", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      try {
+        await streaming.warmup({
+          apiKey: "k",
+          mode: "byok",
+          language: "en",
+          extraLanguages: ["pl"],
+        });
+        await streaming.connect({
+          apiKey: "k",
+          mode: "byok",
+          language: "en",
+          extraLanguages: ["de"],
+        });
+        await wait(20);
+
+        assert.equal(connections.length, 2, "a second, cold socket was opened");
+        assert.equal(connections[0].closed, true, "the mismatched warm socket was closed");
+        assert.equal(streaming.isConnected, true);
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
+
+  it("cold-starts when the filler-removal flag differs from the warmed-up session", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      try {
+        await streaming.warmup({ apiKey: "k", mode: "byok", removeFillers: true });
+        await streaming.connect({ apiKey: "k", mode: "byok", removeFillers: false });
+        await wait(20);
+
+        assert.equal(connections.length, 2, "a second, cold socket was opened");
+        assert.equal(connections[0].closed, true, "the mismatched warm socket was closed");
+        assert.equal(streaming.isConnected, true);
+      } finally {
+        streaming.cleanupAll();
+      }
+    });
+  });
 });
 
 describe("message handling (loopback)", () => {
@@ -574,6 +643,39 @@ describe("message handling (loopback)", () => {
       ["partial", "Hello wor"],
       ["final", "Hello"],
       ["partial", "world how"],
+    ]);
+  });
+
+  it("strips fillers from final and partial text by default", () => {
+    const streaming = new SonioxStreaming();
+    const events = [];
+    streaming.onFinalTranscript = (text) => events.push(["final", text]);
+    streaming.onPartialTranscript = (text) => events.push(["partial", text]);
+
+    streaming.handleMessage(JSON.stringify({ tokens: [{ text: "Um, hello", is_final: true }] }));
+    streaming.handleMessage(JSON.stringify({ tokens: [{ text: "um there", is_final: false }] }));
+
+    assert.deepEqual(events, [
+      ["final", "Hello"],
+      ["partial", ""],
+      ["partial", "There"],
+    ]);
+  });
+
+  it("leaves fillers untouched in final and partial text when removeFillers is disabled", () => {
+    const streaming = new SonioxStreaming();
+    streaming.removeFillersEnabled = false;
+    const events = [];
+    streaming.onFinalTranscript = (text) => events.push(["final", text]);
+    streaming.onPartialTranscript = (text) => events.push(["partial", text]);
+
+    streaming.handleMessage(JSON.stringify({ tokens: [{ text: "Um, hello", is_final: true }] }));
+    streaming.handleMessage(JSON.stringify({ tokens: [{ text: "um there", is_final: false }] }));
+
+    assert.deepEqual(events, [
+      ["final", "Um, hello"],
+      ["partial", ""],
+      ["partial", "um there"],
     ]);
   });
 

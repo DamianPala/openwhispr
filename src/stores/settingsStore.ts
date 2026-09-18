@@ -306,6 +306,7 @@ const BOOLEAN_SETTINGS = new Set([
   "gcalPrimaryOnly",
   "mcalPrimaryOnly",
   "appleCalendarConnected",
+  "sonioxRemoveFillers",
 ]);
 
 const ARRAY_SETTINGS = new Set([
@@ -316,6 +317,7 @@ const ARRAY_SETTINGS = new Set([
   "onboardingUseCases",
   "spokenLanguages",
   "translationTargets",
+  "sonioxExtraLanguages",
 ]);
 
 const NUMERIC_SETTINGS = new Set([
@@ -846,6 +848,22 @@ function migrateRetiredCloudModels() {
 
 migrateRetiredCloudModels();
 
+// One-shot: the single Secondary Language dropdown became a list of up to 3
+// extra languages. A prior selection becomes its sole entry; the
+// retired key is dropped either way so it can't resurface on a hand-edited
+// localStorage.
+function migrateSonioxExtraLanguages() {
+  if (!isBrowser) return;
+  const legacy = localStorage.getItem("sonioxSecondaryLanguage");
+  if (legacy === null) return;
+  if (legacy && localStorage.getItem("sonioxExtraLanguages") === null) {
+    localStorage.setItem("sonioxExtraLanguages", JSON.stringify([legacy]));
+  }
+  localStorage.removeItem("sonioxSecondaryLanguage");
+}
+
+migrateSonioxExtraLanguages();
+
 export interface SettingsState
   extends
     TranscriptionSettings,
@@ -1114,12 +1132,14 @@ export interface SettingsState
   setCortiTenant: (value: string) => void;
 
   // Soniox (BYOK)
-  sonioxSecondaryLanguage: string;
+  sonioxExtraLanguages: string[];
   sonioxRegion: string;
   sonioxKeepAliveTimeout: number;
-  setSonioxSecondaryLanguage: (value: string) => void;
+  sonioxRemoveFillers: boolean;
+  setSonioxExtraLanguages: (codes: string[]) => void;
   setSonioxRegion: (value: string) => void;
   setSonioxKeepAliveTimeout: (value: number) => void;
+  setSonioxRemoveFillers: (value: boolean) => void;
 
   // Enterprise providers
   enterpriseSetupMode: EnterpriseSetupMode;
@@ -1506,9 +1526,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   cleanupCloudBaseUrl: readString("cleanupCloudBaseUrl", API_ENDPOINTS.OPENAI_BASE),
   cortiEnvironment: readString("cortiEnvironment", "us"),
   cortiTenant: readString("cortiTenant", "base"),
-  sonioxSecondaryLanguage: readString("sonioxSecondaryLanguage", ""),
+  sonioxExtraLanguages: readStringArray("sonioxExtraLanguages", []),
   sonioxRegion: readString("sonioxRegion", "us"),
   sonioxKeepAliveTimeout: readNumber("sonioxKeepAliveTimeout", 0),
+  sonioxRemoveFillers: readBoolean("sonioxRemoveFillers", true),
   customDictionary: readStringArray("customDictionary", []),
   snippets: (() => {
     try {
@@ -2179,9 +2200,18 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setDeepgramApiKey: createSecretSetter("deepgramApiKey", "deepgram"),
   setAssemblyaiApiKey: createSecretSetter("assemblyaiApiKey", "assemblyai"),
   setSonioxApiKey: createSecretSetter("sonioxApiKey", "soniox"),
-  setSonioxSecondaryLanguage: createStringSetter("sonioxSecondaryLanguage"),
+  // Dedupes, drops the main language (extras are meaningless if they repeat
+  // it), and caps at 3 — Soniox's language_hints has no benefit past a
+  // handful of languages and the UI only has room for a short chip row.
+  setSonioxExtraLanguages: (codes: string[]) => {
+    const main = get().preferredLanguage;
+    const deduped = [...new Set(codes)].filter((code) => code && code !== main).slice(0, 3);
+    if (isBrowser) localStorage.setItem("sonioxExtraLanguages", JSON.stringify(deduped));
+    set({ sonioxExtraLanguages: deduped });
+  },
   setSonioxRegion: createStringSetter("sonioxRegion"),
   setSonioxKeepAliveTimeout: createNumberSetter("sonioxKeepAliveTimeout"),
+  setSonioxRemoveFillers: createBooleanSetter("sonioxRemoveFillers"),
   setCustomTranscriptionApiKey: (key: string) => {
     set({ customTranscriptionApiKey: key });
     debouncedSaveSecret("customTranscription", key);

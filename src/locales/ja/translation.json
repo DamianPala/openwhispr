@@ -868,8 +868,12 @@
         "jp": "日本",
         "in": "インド"
       },
-      "secondaryLanguage": "補助言語",
-      "secondaryLanguageNone": "なし",
+      "extraLanguages": "追加言語",
+      "extraLanguagesAdd": "追加",
+      "removeFillers": {
+        "label": "フィラーワードを削除",
+        "description": "貼り付け前に \"um\"、\"uh\"、\"yyy\" などのフィラーワードを取り除きます。"
+      },
       "keepAlive": {
         "label": "接続維持",
         "description": "録音の間も接続を維持し、次回の録音を即座に開始できるようにします（追加料金がかかります）。",

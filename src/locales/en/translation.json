@@ -868,8 +868,12 @@
         "jp": "Japan",
         "in": "India"
       },
-      "secondaryLanguage": "Secondary Language",
-      "secondaryLanguageNone": "None",
+      "extraLanguages": "Extra Languages",
+      "extraLanguagesAdd": "Add",
+      "removeFillers": {
+        "label": "Remove Filler Words",
+        "description": "Drops \"um\", \"uh\", \"yyy\" before the text is pasted."
+      },
       "keepAlive": {
         "label": "Keep-Alive",
         "description": "Keeps the connection warm between recordings for an instant start, at extra cost.",

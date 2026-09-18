@@ -2740,18 +2740,20 @@ declare global {
       // Soniox Streaming (BYOK-only)
       sonioxStreamingWarmup?: (
         options?: DictationRealtimeSessionOptions & {
-          secondaryLanguage?: string;
+          extraLanguages?: string[];
           region?: string;
           keepAliveTimeout?: number;
+          removeFillers?: boolean;
         }
       ) => Promise<
         { success: boolean; alreadyWarm?: boolean; error?: string } & PolicyFailureMetadata
       >;
       sonioxStreamingStart?: (
         options?: DictationRealtimeSessionOptions & {
-          secondaryLanguage?: string;
+          extraLanguages?: string[];
           region?: string;
           keepAliveTimeout?: number;
+          removeFillers?: boolean;
         }
       ) => Promise<
         { success: boolean; usedWarmConnection?: boolean; error?: string } & PolicyFailureMetadata

@@ -3,12 +3,13 @@ import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Download, Trash2, Cloud, Lock, X, Zap, Check, CircleAlert } from "./icons";
+import { Download, Trash2, Cloud, Lock, X, Zap, Check, CircleAlert, Plus } from "./icons";
 import { ProviderIcon } from "./ui/ProviderIcon";
 import { ProviderTabs } from "./ui/ProviderTabs";
 import ModelCardList from "./ui/ModelCardList";
 import { DownloadProgressBar } from "./ui/DownloadProgressBar";
 import ApiKeyInput from "./ui/ApiKeyInput";
+import { Toggle } from "./ui/toggle";
 import LanguageSelector, { type LanguageOption } from "./ui/LanguageSelector";
 import languageRegistry from "../config/languageRegistry.json";
 import { ConfirmDialog } from "./ui/dialog";
@@ -242,9 +243,11 @@ interface TranscriptionModelPickerProps {
   streamingOnly?: boolean;
 }
 
-const SECONDARY_LANGUAGE_OPTIONS: LanguageOption[] = languageRegistry.languages
+const EXTRA_LANGUAGE_OPTIONS: LanguageOption[] = languageRegistry.languages
   .filter((l) => l.code !== "auto")
   .map(({ code, label, flag }) => ({ value: code, label, flag }));
+
+const EXTRA_LANGUAGE_MAX = 3;
 
 const SONIOX_KEEP_ALIVE_OPTIONS = [0, 30, 60, 120, 300];
 
@@ -455,12 +458,34 @@ export default function TranscriptionModelPicker({
   const setSonioxApiKey = useSettingsStore((s) => s.setSonioxApiKey);
   const sonioxRegion = useSettingsStore((s) => s.sonioxRegion);
   const setSonioxRegion = useSettingsStore((s) => s.setSonioxRegion);
-  const sonioxSecondaryLanguage = useSettingsStore((s) => s.sonioxSecondaryLanguage);
-  const setSonioxSecondaryLanguage = useSettingsStore((s) => s.setSonioxSecondaryLanguage);
+  const sonioxExtraLanguages = useSettingsStore((s) => s.sonioxExtraLanguages);
+  const setSonioxExtraLanguages = useSettingsStore((s) => s.setSonioxExtraLanguages);
   const sonioxKeepAliveTimeout = useSettingsStore((s) => s.sonioxKeepAliveTimeout);
   const setSonioxKeepAliveTimeout = useSettingsStore((s) => s.setSonioxKeepAliveTimeout);
+  const sonioxRemoveFillers = useSettingsStore((s) => s.sonioxRemoveFillers);
+  const setSonioxRemoveFillers = useSettingsStore((s) => s.setSonioxRemoveFillers);
   const preferredLanguage = useSettingsStore((s) => s.preferredLanguage);
   const isAutoLanguage = !preferredLanguage || preferredLanguage === "auto";
+  const [isPickingExtraLanguage, setIsPickingExtraLanguage] = useState(false);
+  // A chip that became the main language stays in the store until the extras
+  // are edited again; hide it here, the routing mapping drops it as well.
+  const visibleExtraLanguages = sonioxExtraLanguages.filter((code) => code !== preferredLanguage);
+  const extraLanguagePickerOptions = useMemo(
+    () =>
+      EXTRA_LANGUAGE_OPTIONS.filter(
+        (option) =>
+          option.value !== preferredLanguage && !sonioxExtraLanguages.includes(option.value)
+      ),
+    [preferredLanguage, sonioxExtraLanguages]
+  );
+  // Collapsing back to the [+ Add] button is handled by LanguageSelector's
+  // onClose (fired on select too, not just cancel), so this only updates state.
+  const addSonioxExtraLanguage = (code: string) => {
+    setSonioxExtraLanguages([...sonioxExtraLanguages, code]);
+  };
+  const removeSonioxExtraLanguage = (code: string) => {
+    setSonioxExtraLanguages(sonioxExtraLanguages.filter((c) => c !== code));
+  };
   const customTranscriptionApiKey = useSettingsStore((s) => s.customTranscriptionApiKey);
   const setCustomTranscriptionApiKey = useSettingsStore((s) => s.setCustomTranscriptionApiKey);
   const isSignedIn = useSettingsStore((s) => s.isSignedIn);
@@ -1337,28 +1362,70 @@ export default function TranscriptionModelPicker({
 
                   {displayedCloudProvider === "soniox" && (
                     <div
-                      className={`flex items-center justify-between gap-3 ${
+                      className={`flex items-start justify-between gap-3 ${
                         isAutoLanguage ? "opacity-50 pointer-events-none" : ""
                       }`}
                     >
-                      <label className="text-xs font-medium text-foreground whitespace-nowrap">
-                        {t("transcription.soniox.secondaryLanguage")}
+                      <label className="text-xs font-medium text-foreground whitespace-nowrap pt-1.5">
+                        {t("transcription.soniox.extraLanguages")}
                       </label>
-                      <LanguageSelector
-                        value={isAutoLanguage ? "none" : sonioxSecondaryLanguage || "none"}
-                        onChange={(value) =>
-                          setSonioxSecondaryLanguage(value === "none" ? "" : value)
-                        }
-                        options={[
-                          {
-                            value: "none",
-                            label: t("transcription.soniox.secondaryLanguageNone"),
-                            flag: "",
-                          },
-                          ...SECONDARY_LANGUAGE_OPTIONS,
-                        ]}
-                        className="min-w-32"
-                      />
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        {visibleExtraLanguages.map((code) => {
+                          const option = EXTRA_LANGUAGE_OPTIONS.find((o) => o.value === code);
+                          return (
+                            <span
+                              key={code}
+                              className="inline-flex items-center gap-1 h-8 ps-2.5 pe-1.5 rounded border border-border/70 bg-surface-1/80 text-xs font-medium text-foreground"
+                            >
+                              <span className="me-0.5">{option?.flag}</span>
+                              {option?.label ?? code}
+                              <button
+                                type="button"
+                                onClick={() => removeSonioxExtraLanguage(code)}
+                                className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                                aria-label={t("common.delete")}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          );
+                        })}
+                        {visibleExtraLanguages.length < EXTRA_LANGUAGE_MAX &&
+                          (isPickingExtraLanguage ? (
+                            <LanguageSelector
+                              value=""
+                              onChange={addSonioxExtraLanguage}
+                              options={extraLanguagePickerOptions}
+                              placeholder={t("transcription.soniox.extraLanguagesAdd")}
+                              className="min-w-32"
+                              defaultOpen
+                              onClose={() => setIsPickingExtraLanguage(false)}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setIsPickingExtraLanguage(true)}
+                              className="inline-flex items-center gap-1 h-8 px-2.5 rounded border border-dashed border-border/70 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-border-hover transition-colors"
+                            >
+                              <Plus className="w-3 h-3" />
+                              {t("transcription.soniox.extraLanguagesAdd")}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {displayedCloudProvider === "soniox" && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="text-xs font-medium text-foreground whitespace-nowrap">
+                          {t("transcription.soniox.removeFillers.label")}
+                        </label>
+                        <Toggle checked={sonioxRemoveFillers} onChange={setSonioxRemoveFillers} />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        {t("transcription.soniox.removeFillers.description")}
+                      </p>
                     </div>
                   )}
 

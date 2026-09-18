@@ -276,13 +276,13 @@ test("options: corti carries environment and tenant; auto language is omitted", 
   assert.equal(options.language, undefined);
 });
 
-test("options: soniox carries region/keepAliveTimeout and secondary language only when a language is resolved", async () => {
+test("options: soniox carries region/keepAliveTimeout and extra languages only when a language is resolved", async () => {
   const { buildStreamingSessionOptions } = await loadRouting();
   const sonioxSettings = settingsWith({
     cloudTranscriptionProvider: "soniox",
     cloudTranscriptionMode: "byok",
     cloudTranscriptionModel: "stt-rt-v5",
-    sonioxSecondaryLanguage: "pl",
+    sonioxExtraLanguages: ["pl", "de"],
     sonioxRegion: "eu",
     sonioxKeepAliveTimeout: 60,
   });
@@ -293,9 +293,10 @@ test("options: soniox carries region/keepAliveTimeout and secondary language onl
     language: "en",
     keyterms: ["Qdrant"],
   });
-  assert.equal(withLanguage.secondaryLanguage, "pl");
+  assert.deepEqual(withLanguage.extraLanguages, ["pl", "de"]);
   assert.equal(withLanguage.region, "eu");
   assert.equal(withLanguage.keepAliveTimeout, 60);
+  assert.equal(withLanguage.removeFillers, true, "defaults to true when unset");
 
   const withoutLanguage = buildStreamingSessionOptions({
     providerName: "soniox",
@@ -304,9 +305,41 @@ test("options: soniox carries region/keepAliveTimeout and secondary language onl
     keyterms: [],
   });
   assert.equal(withoutLanguage.language, undefined);
-  assert.equal(withoutLanguage.secondaryLanguage, undefined, "hints are meaningless on auto");
+  assert.equal(withoutLanguage.extraLanguages, undefined, "hints are meaningless on auto");
   assert.equal(withoutLanguage.region, "eu");
   assert.equal(withoutLanguage.keepAliveTimeout, 60);
+
+  const mainLanguageEchoedInExtras = buildStreamingSessionOptions({
+    providerName: "soniox",
+    settings: settingsWith({
+      cloudTranscriptionProvider: "soniox",
+      cloudTranscriptionMode: "byok",
+      cloudTranscriptionModel: "stt-rt-v5",
+      sonioxExtraLanguages: ["en", "pl"],
+      sonioxRegion: "us",
+      sonioxKeepAliveTimeout: 0,
+    }),
+    language: "en",
+    keyterms: [],
+  });
+  assert.deepEqual(
+    mainLanguageEchoedInExtras.extraLanguages,
+    ["pl"],
+    "the main language is filtered out of the extras"
+  );
+
+  const removeFillersOff = buildStreamingSessionOptions({
+    providerName: "soniox",
+    settings: settingsWith({
+      cloudTranscriptionProvider: "soniox",
+      cloudTranscriptionMode: "byok",
+      cloudTranscriptionModel: "stt-rt-v5",
+      sonioxRemoveFillers: false,
+    }),
+    language: "en",
+    keyterms: [],
+  });
+  assert.equal(removeFillersOff.removeFillers, false);
 });
 
 test("options: provider is stamped for every renderer channel binding", async () => {

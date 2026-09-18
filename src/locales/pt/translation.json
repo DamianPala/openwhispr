@@ -847,8 +847,12 @@
         "jp": "Japão",
         "in": "Índia"
       },
-      "secondaryLanguage": "Idioma secundário",
-      "secondaryLanguageNone": "Nenhum",
+      "extraLanguages": "Idiomas adicionais",
+      "extraLanguagesAdd": "Adicionar",
+      "removeFillers": {
+        "label": "Remover palavras de preenchimento",
+        "description": "Remove \"um\", \"uh\", \"yyy\" antes de o texto ser colado."
+      },
       "keepAlive": {
         "label": "Manter conexão",
         "description": "Mantém a conexão ativa entre gravações para um início instantâneo, com custo adicional.",

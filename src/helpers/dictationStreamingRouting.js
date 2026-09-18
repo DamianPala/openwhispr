@@ -72,11 +72,19 @@ export function buildStreamingSessionOptions({
     options.preview = true;
   }
   if (providerName === "soniox") {
-    // Hints are meaningless on auto: only send a secondary language when a
-    // concrete preferred language was resolved.
-    if (options.language) options.secondaryLanguage = settings.sonioxSecondaryLanguage || undefined;
+    // Hints are meaningless on auto: only send extra languages when a
+    // concrete preferred language was resolved. Changing the main language to
+    // one already picked as an extra is filtered out here rather than in the
+    // store, since the store setter for the main language has no obvious hook
+    // to reach into a different setting's array.
+    if (options.language) {
+      options.extraLanguages = (settings.sonioxExtraLanguages || []).filter(
+        (code) => code !== options.language
+      );
+    }
     options.region = settings.sonioxRegion || "us";
     options.keepAliveTimeout = settings.sonioxKeepAliveTimeout || 0;
+    options.removeFillers = settings.sonioxRemoveFillers !== false;
   }
   return options;
 }

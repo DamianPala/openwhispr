@@ -3662,8 +3662,12 @@
         "jp": "اليابان",
         "in": "الهند"
       },
-      "secondaryLanguage": "اللغة الثانوية",
-      "secondaryLanguageNone": "بدون",
+      "extraLanguages": "لغات إضافية",
+      "extraLanguagesAdd": "إضافة",
+      "removeFillers": {
+        "label": "إزالة كلمات الحشو",
+        "description": "يزيل \"um\" و\"uh\" و\"yyy\" قبل لصق النص."
+      },
       "keepAlive": {
         "label": "الإبقاء على الاتصال",
         "description": "يحافظ على الاتصال بين التسجيلات لبدء فوري، مقابل تكلفة إضافية.",

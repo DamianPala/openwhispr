@@ -868,8 +868,12 @@
         "jp": "日本",
         "in": "印度"
       },
-      "secondaryLanguage": "辅助语言",
-      "secondaryLanguageNone": "无",
+      "extraLanguages": "附加语言",
+      "extraLanguagesAdd": "添加",
+      "removeFillers": {
+        "label": "移除填充词",
+        "description": "在粘贴文本前移除 \"um\"、\"uh\"、\"yyy\" 等填充词。"
+      },
       "keepAlive": {
         "label": "保持连接",
         "description": "在两次录音之间保持连接畅通，以便下次录音立即开始，需额外付费。",
