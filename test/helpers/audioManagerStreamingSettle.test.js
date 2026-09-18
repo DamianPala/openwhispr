@@ -22,7 +22,8 @@ async function loadManager(t) {
         export const isCloudDictationAgentMode = () => false;
         export const isCloudTranslationMode = () => false;
       `,
-      "/services/ReasoningService": "export default { processText: async (t) => t };",
+      "/services/ReasoningService":
+        "export default { processText: async (t) => t, cancelAllRequests() {} };",
       "/services/SyncService.js": "export const syncService = {};",
       "/lib/auth": "export const withSessionRefresh = (fn) => fn();",
       "/utils/permissions": "export const isAccessibilitySkipped = () => false;",
@@ -115,4 +116,58 @@ test("clears its timers so a settled wait leaves no handles behind", async (t) =
   assert.equal(manager.streamingTextBump, null);
   assert.equal(manager.streamingTextDebounce, null);
   assert.equal(manager.streamingFinalizedSettle, null);
+});
+
+test("a cancel during finalize joins the in-flight stop; the provider is stopped once", async (t) => {
+  const manager = await loadManager(t);
+  const sessionId = "session-1";
+  const stopModes = [];
+  const provider = {
+    awaitsFinalTranscript: true,
+    stop: async () => {
+      stopModes.push(manager._streamingStopMode);
+    },
+  };
+  Object.assign(manager, {
+    _streamingCancellationGeneration: 0,
+    _activeStreamingSessionId: sessionId,
+    _streamingStopPromise: null,
+    _streamingStopMode: null,
+    _streamingMicSwapPromise: null,
+    isStreaming: true,
+    isRecording: true,
+    isProcessing: false,
+    streamingStartInProgress: false,
+    recordingStartTime: Date.now(),
+    streamingCleanupFns: [],
+    streamingFallbackRecorder: null,
+    streamingFallbackChunks: [],
+    _streamingFallbackSegments: [],
+    micRecovery: { stop() {} },
+    cleanupStreamingAudio: () => {},
+    cleanupPreview: async () => {},
+    finishStreamingFallbackSegment: async () => null,
+    mergeRecordedSegments: async () => null,
+    getLargestRecordedSegment: () => null,
+    getStreamingProvider: () => provider,
+    onStateChange: () => {},
+  });
+
+  // The stop owns _streamingStopPromise for its whole run, so a cancel that
+  // lands on the text-settle wait only bumps the cancellation generation and
+  // returns that same promise; the abandoned finalize issues the one stop.
+  const stop = manager.stopStreamingRecording();
+  while (!manager.streamingFinalizedSettle) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const inFlight = manager._streamingStopPromise;
+  const cancel = manager.cancelStreamingRecording();
+
+  assert.equal(manager._streamingStopMode, "finalize");
+  assert.equal(await stop, true);
+  assert.equal(await cancel, true);
+  assert.equal(await inFlight, true);
+  assert.deepEqual(stopModes, ["finalize"], `provider.stop() modes: ${stopModes}`);
+  assert.equal(manager._streamingStopPromise, null);
+  assert.equal(manager._streamingStopMode, null);
 });
