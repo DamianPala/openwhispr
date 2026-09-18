@@ -378,6 +378,8 @@ const isValidApiKey = (key, provider = "openai") => {
 // Corti), so the transcript tail lands whenever it lands — wait, don't sleep.
 const STREAMING_FINAL_QUIET_MS = 250;
 const STREAMING_FINAL_CEILING_MS = 2000;
+// Bound on waiting for the worklet's "flushed" sentinel; only a torn-down
+// audio context (port never answers) reaches it.
 const STREAMING_FLUSH_CEILING_MS = 120;
 
 // Both realtime providers share the dictation realtime IPC surface and differ
@@ -5317,10 +5319,14 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     //    context). Then mark streaming done so no further audio is forwarded.
     //    An acknowledged finalize already awaited the sentinel above.
     if (!provider.finalizeAcknowledged) {
+      let flushCeiling = null;
       await Promise.race([
         flushed,
-        new Promise((resolve) => setTimeout(resolve, STREAMING_FLUSH_CEILING_MS)),
+        new Promise((resolve) => {
+          flushCeiling = setTimeout(resolve, STREAMING_FLUSH_CEILING_MS);
+        }),
       ]);
+      clearTimeout(flushCeiling);
       this._streamingFlushResolve = null;
     }
     if (wasCancelled()) return abandonFinalization();
