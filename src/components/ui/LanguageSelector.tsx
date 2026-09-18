@@ -23,6 +23,14 @@ interface LanguageSelectorProps {
   options?: LanguageOption[];
   className?: string;
   placeholder?: string;
+  // Seeds isOpen so a caller that swaps its own trigger for this component
+  // (e.g. an "Add" button) can hand it over already expanded.
+  defaultOpen?: boolean;
+  // Fired whenever the dropdown closes without a caller-owned onChange having
+  // just fired for it: click-outside, Escape, and (redundantly, but harmless)
+  // right after a selection. Lets a caller that replaced its own trigger with
+  // this component know when to swap back, including the cancel paths.
+  onClose?: () => void;
 }
 
 export default function LanguageSelector({
@@ -31,11 +39,13 @@ export default function LanguageSelector({
   options,
   className = "",
   placeholder,
+  defaultOpen = false,
+  onClose,
 }: LanguageSelectorProps) {
   const { t } = useTranslation();
   const items = options ?? REGISTRY_OPTIONS;
   const showSearch = items.length > LIST_SEARCH_THRESHOLD;
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const [searchQuery, setSearchQuery] = useState("");
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0, width: 0 });
@@ -105,12 +115,13 @@ export default function LanguageSelector({
       ) {
         setIsOpen(false);
         setSearchQuery("");
+        onClose?.();
       }
     };
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [onClose]);
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isOpen) {
       if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
@@ -139,6 +150,7 @@ export default function LanguageSelector({
         e.preventDefault();
         setIsOpen(false);
         handleSearchQueryChange("");
+        onClose?.();
         break;
     }
   };
@@ -147,6 +159,7 @@ export default function LanguageSelector({
     onChange(languageValue);
     setIsOpen(false);
     handleSearchQueryChange("");
+    onClose?.();
   };
 
   const clearSearch = () => {

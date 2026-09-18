@@ -28,15 +28,19 @@ const resolveRegion = (region) => (Object.hasOwn(SONIOX_REGION_HOSTS, region) ? 
 // the same guard resolveByokModel applies in transcriptionRoute.ts.
 const resolveModel = (model) => (model && model.startsWith("stt-rt-") ? model : DEFAULT_MODEL);
 
-function buildConfigMessage({ apiKey, model, language, secondaryLanguage, keyterms, sampleRate }) {
+function buildConfigMessage({ apiKey, model, language, extraLanguages, keyterms, sampleRate }) {
   const config = {
     api_key: apiKey,
     model: resolveModel(model),
     audio_format: "pcm_s16le",
     sample_rate: sampleRate || 16000,
     num_channels: 1,
+    // Main language first, then extras in the user's order — new Set() keeps
+    // insertion order, so this also dedupes a base code repeated between them.
     language_hints: [
-      ...new Set([toBaseLanguage(language), toBaseLanguage(secondaryLanguage)].filter(Boolean)),
+      ...new Set(
+        [toBaseLanguage(language), ...(extraLanguages || []).map(toBaseLanguage)].filter(Boolean)
+      ),
     ],
   };
   const terms = (keyterms || []).filter(Boolean);
@@ -54,10 +58,11 @@ const warmIdentity = (options) =>
   JSON.stringify([
     resolveModel(options.model),
     options.language || null,
-    options.secondaryLanguage || null,
+    options.extraLanguages || [],
     options.sampleRate || 16000,
     resolveRegion(options.region),
     (options.keyterms || []).filter(Boolean),
+    options.removeFillers !== false,
   ]);
 
 // Filler words / hesitations to strip from assembled text.
@@ -155,6 +160,7 @@ class SonioxStreaming {
     this.isDisconnecting = false;
     this.audioBytesSent = 0;
     this.currentModel = DEFAULT_MODEL;
+    this.removeFillersEnabled = true;
     this._finalizeSent = false;
     this._lastAudioSentAt = 0;
     this._connecting = false;
@@ -168,7 +174,12 @@ class SonioxStreaming {
   }
 
   getFullTranscript() {
-    return removeFillers(this.finalTokens.map((t) => t.text).join("")).trim();
+    return this._clean(this.finalTokens.map((t) => t.text).join(""));
+  }
+
+  // removeFillers() already trims, so the disabled branch matches its shape.
+  _clean(text) {
+    return this.removeFillersEnabled ? removeFillers(text) : text.trim();
   }
 
   // process.env.SONIOX_WS_URL is a main-process-only escape hatch for a
@@ -207,6 +218,7 @@ class SonioxStreaming {
       // matches the model buildConfigMessage would resolve for a cold start).
       const configMessage = buildConfigMessage(options);
       this.currentModel = configMessage.model;
+      this.removeFillersEnabled = options.removeFillers !== false;
 
       // Try to use pre-warmed connection for instant start
       if (this.hasWarmConnection()) {
@@ -317,9 +329,9 @@ class SonioxStreaming {
       // Final first: the consumer appends the partial to its committed text, so
       // the partial carries only the non-final tail and must follow the commit.
       if (newFinalTokens) {
-        this.onFinalTranscript?.(removeFillers(rawFinal));
+        this.onFinalTranscript?.(this._clean(rawFinal));
       }
-      this.onPartialTranscript?.(removeFillers(this.currentNonFinalText));
+      this.onPartialTranscript?.(this._clean(this.currentNonFinalText));
       // <fin> closes a finalize: every token for the audio sent before it has
       // already arrived as final, so the stop path can move on without a timer.
       if (finalized) {
