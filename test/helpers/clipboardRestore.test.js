@@ -1487,7 +1487,7 @@ test("paste 2: KDE clipboard write falls back to Electron writeText once when bo
   assert.deepEqual(fakeClipboard.writes, [["writeText", "x"]]);
 });
 
-test("paste 3: KDE primary selection tries xclip, then xsel, then wl-copy at 300ms", async () => {
+test("paste 3: KDE primary selection tries xclip, then xsel, then wl-copy at 300ms with the text on stdin", async () => {
   resetClipboard();
   const syncCalls = [];
   const TestClipboardManager = loadClipboardManager({
@@ -1514,6 +1514,10 @@ test("paste 3: KDE primary selection tries xclip, then xsel, then wl-copy at 300
     ["xclip", "xsel", "wl-copy"]
   );
   assert.equal(syncCalls[2].options.timeout, 300);
+  // The transcript must never be an argv element: /proc/<pid>/cmdline is
+  // world-readable, stdin is not.
+  assert.deepEqual(syncCalls[2].args, ["--primary"]);
+  assert.equal(syncCalls[2].options.input, "hello");
   assert.ok(!fakeClipboard.writes.some((write) => write[2] === "selection"));
 });
 

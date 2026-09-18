@@ -210,14 +210,17 @@ class ClipboardManager {
     // wl-copy connects, offers the selection and forks a serving child before
     // the parent exits; on KDE that handshake also flips keyboard focus, so it
     // is the last-resort fallback there and gets a longer budget (measured
-    // over 100 ms under load) instead of upstream's fast-path value.
+    // over 100 ms under load) instead of upstream's fast-path value. Text
+    // goes on stdin, not argv: argv is visible to every user in
+    // /proc/<pid>/cmdline.
     let writers;
     if (!isWayland) {
       writers = x11Writers;
     } else {
       const wlCopy = {
         tool: "wl-copy",
-        args: ["--primary", "--", text],
+        args: ["--primary"],
+        input: text,
         timeout: isKde ? 300 : 50,
       };
       writers = isKde ? [...x11Writers, wlCopy] : [wlCopy, ...x11Writers];
