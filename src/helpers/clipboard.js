@@ -123,7 +123,13 @@ class ClipboardManager {
     const { isKde } = getLinuxSessionInfo();
 
     // On KDE with XWayland, write to X11 clipboard directly because
-    // wl-copy targets the Wayland clipboard which is desynced from X11
+    // wl-copy targets the Wayland clipboard which is desynced from X11.
+    // Once xclip/xsel owns X11 CLIPBOARD, Electron's writeText must not run
+    // on top: Chromium on X11 mirrors clipboard text into X11 PRIMARY, and
+    // KWin then re-sources the Wayland primary from that X11 owner some
+    // tens of ms later, after _writePrimarySelection has already returned.
+    // The re-sourced primary reads back empty for a while, so a Shift+Insert
+    // landing in that window pastes nothing.
     if (isKde) {
       if (this.commandExists("xclip")) {
         try {
@@ -132,10 +138,7 @@ class ClipboardManager {
             timeout: 200,
             stdio: SELECTION_OWNER_STDIO,
           });
-          if (result.status === 0) {
-            clipboard.writeText(text);
-            return;
-          }
+          if (result.status === 0) return;
         } catch {}
       }
       if (this.commandExists("xsel")) {
@@ -145,10 +148,7 @@ class ClipboardManager {
             timeout: 200,
             stdio: SELECTION_OWNER_STDIO,
           });
-          if (result.status === 0) {
-            clipboard.writeText(text);
-            return;
-          }
+          if (result.status === 0) return;
         } catch {}
       }
       // Last resort: Electron's clipboard.writeText should work on XWayland
