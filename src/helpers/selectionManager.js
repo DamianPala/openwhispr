@@ -645,42 +645,43 @@ class SelectionManager {
     // state and refuses a field with a live selection.
     const baseline = new Set([...beforeWrite, ...this.clipboardManager._readClipboardTextAll()]);
 
-    const copyResult = await sendCopy();
-    if (!copyResult?.success || !copyResult.target) {
-      this._restoreClipboardIfOurs(original, [sentinel], baseline);
-      return { status: "unavailable", code: "copy_failed" };
-    }
-    if (expectedTarget && !this._sameTarget(copyResult.target, expectedTarget)) {
-      this._restoreClipboardIfOurs(original, [sentinel], baseline);
-      return { status: "target_changed" };
-    }
-
-    const deadline = Date.now() + COPY_TIMEOUT_MS;
     let copiedText = null;
-    while (Date.now() < deadline) {
-      copiedText =
-        this.clipboardManager
-          ._readClipboardTextAll()
-          .find((text) => text.length > 0 && text !== sentinel && !baseline.has(text)) ?? null;
-      if (copiedText !== null) break;
-      await new Promise((resolve) => setTimeout(resolve, CLIPBOARD_POLL_MS));
-    }
+    try {
+      const copyResult = await sendCopy();
+      if (!copyResult?.success || !copyResult.target) {
+        return { status: "unavailable", code: "copy_failed" };
+      }
+      if (expectedTarget && !this._sameTarget(copyResult.target, expectedTarget)) {
+        return { status: "target_changed" };
+      }
 
-    this._restoreClipboardIfOurs(original, [sentinel, copiedText], baseline);
-    if (copiedText === null) {
-      return { status: "none", target: copyResult.target };
+      const deadline = Date.now() + COPY_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        copiedText =
+          this.clipboardManager
+            ._readClipboardTextAll()
+            .find((text) => text.length > 0 && text !== sentinel && !baseline.has(text)) ?? null;
+        if (copiedText !== null) break;
+        await new Promise((resolve) => setTimeout(resolve, CLIPBOARD_POLL_MS));
+      }
+
+      if (copiedText === null) {
+        return { status: "none", target: copyResult.target };
+      }
+      // A line copy from an empty-selection Ctrl+C is exactly one line with a
+      // trailing terminator; treat that shape from a known line-copy editor as
+      // "no selection" so a bare caret never gets its line rewritten. Proper
+      // fix: a real selection read (UIA TextPattern), like --atspi-selection.
+      if (
+        /^[^\n]*\r?\n$/.test(copiedText) &&
+        this._isLineCopyEditor(expectedTarget, copyResult.target)
+      ) {
+        return { status: "none", target: copyResult.target };
+      }
+      return { status: "selected", text: copiedText, target: copyResult.target };
+    } finally {
+      this._restoreClipboardIfOurs(original, [sentinel, copiedText], baseline);
     }
-    // A line copy from an empty-selection Ctrl+C is exactly one line with a
-    // trailing terminator; treat that shape from a known line-copy editor as
-    // "no selection" so a bare caret never gets its line rewritten. Proper
-    // fix: a real selection read (UIA TextPattern), like --atspi-selection.
-    if (
-      /^[^\n]*\r?\n$/.test(copiedText) &&
-      this._isLineCopyEditor(expectedTarget, copyResult.target)
-    ) {
-      return { status: "none", target: copyResult.target };
-    }
-    return { status: "selected", text: copiedText, target: copyResult.target };
   }
 
   _targetSignature(target) {

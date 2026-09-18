@@ -337,6 +337,25 @@ test("a copy that replaces the sentinel is captured and the clipboard restored",
   assert.equal(writes.at(-1), "user clipboard");
 });
 
+test("a copy that throws still restores the clipboard", async () => {
+  const { manager, writes } = makeCaptureHarness({
+    readClipboard: (written) => {
+      if (written.length === 0) return ["user clipboard"];
+      return [written[0]];
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      manager._captureViaClipboard(async () => {
+        throw new Error("boom");
+      }, null),
+    /boom/
+  );
+
+  assert.equal(writes.at(-1), "user clipboard");
+});
+
 // A line copy (one line + trailing terminator) from an empty-selection Ctrl+C
 // in editors like VS Code must never be mistaken for a real selection.
 const VSCODE_TARGET = { kind: "x11-window", id: "7", windowClass: "code" };
