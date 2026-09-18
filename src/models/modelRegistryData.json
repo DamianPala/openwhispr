@@ -423,7 +423,7 @@
     {
       "id": "soniox",
       "name": "Soniox",
-      "baseUrl": "wss://stt-rt.soniox.com",
+      "baseUrl": "https://api.soniox.com/v1",
       "models": [
         {
           "id": "stt-rt-v5",
