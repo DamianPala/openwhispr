@@ -467,6 +467,14 @@ export default function TranscriptionModelPicker({
   const preferredLanguage = useSettingsStore((s) => s.preferredLanguage);
   const isAutoLanguage = !preferredLanguage || preferredLanguage === "auto";
   const [isPickingExtraLanguage, setIsPickingExtraLanguage] = useState(false);
+  const addExtraLanguageRef = useRef<HTMLButtonElement>(null);
+  // Auto language disables the whole extra-languages row; if it flips true
+  // while the picker is open, close it rather than leaving it reachable.
+  useEffect(() => {
+    if (isAutoLanguage && isPickingExtraLanguage) {
+      setIsPickingExtraLanguage(false);
+    }
+  }, [isAutoLanguage, isPickingExtraLanguage]);
   // A chip that became the main language stays in the store until the extras
   // are edited again; hide it here, the routing mapping drops it as well.
   const visibleExtraLanguages = sonioxExtraLanguages.filter((code) => code !== preferredLanguage);
@@ -1361,57 +1369,82 @@ export default function TranscriptionModelPicker({
                   ))}
 
                   {displayedCloudProvider === "soniox" && (
-                    <div
-                      className={`flex items-start justify-between gap-3 ${
-                        isAutoLanguage ? "opacity-50 pointer-events-none" : ""
-                      }`}
-                    >
-                      <label className="text-xs font-medium text-foreground whitespace-nowrap pt-1.5">
-                        {t("transcription.soniox.extraLanguages")}
-                      </label>
-                      <div className="flex flex-wrap items-center justify-end gap-1.5">
-                        {visibleExtraLanguages.map((code) => {
-                          const option = EXTRA_LANGUAGE_OPTIONS.find((o) => o.value === code);
-                          return (
-                            <span
-                              key={code}
-                              className="inline-flex items-center gap-1 h-8 ps-2.5 pe-1.5 rounded border border-border/70 bg-surface-1/80 text-xs font-medium text-foreground"
-                            >
-                              <span className="me-0.5">{option?.flag}</span>
-                              {option?.label ?? code}
-                              <button
-                                type="button"
-                                onClick={() => removeSonioxExtraLanguage(code)}
-                                className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                                aria-label={t("common.delete")}
+                    <div className="space-y-1">
+                      <div
+                        className={`flex items-start justify-between gap-3 ${
+                          isAutoLanguage ? "opacity-50" : ""
+                        }`}
+                      >
+                        <label className="text-xs font-medium text-foreground whitespace-nowrap pt-1.5">
+                          {t("transcription.soniox.extraLanguages")}
+                        </label>
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          {visibleExtraLanguages.map((code) => {
+                            const option = EXTRA_LANGUAGE_OPTIONS.find((o) => o.value === code);
+                            return (
+                              <span
+                                key={code}
+                                className="inline-flex items-center gap-1 h-8 ps-2.5 pe-1.5 rounded border border-border/70 bg-surface-1/80 text-xs font-medium text-foreground"
                               >
-                                <X className="w-3 h-3" />
+                                <span aria-hidden="true" className="me-0.5">
+                                  {option?.flag}
+                                </span>
+                                {option?.label ?? code}
+                                <button
+                                  type="button"
+                                  onClick={() => removeSonioxExtraLanguage(code)}
+                                  disabled={isAutoLanguage}
+                                  className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                                  aria-label={t("dictationTranslation.removeTarget", {
+                                    language: option?.label ?? code,
+                                  })}
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                          {visibleExtraLanguages.length < EXTRA_LANGUAGE_MAX &&
+                            (isPickingExtraLanguage ? (
+                              <LanguageSelector
+                                value=""
+                                onChange={addSonioxExtraLanguage}
+                                options={extraLanguagePickerOptions}
+                                placeholder={t("transcription.soniox.extraLanguagesAdd")}
+                                className="min-w-32"
+                                defaultOpen
+                                onClose={() => {
+                                  setIsPickingExtraLanguage(false);
+                                  // The picker unmounts with focus inside it, which drops focus
+                                  // to <body>; hand it to the Add button. A click-outside has
+                                  // already focused the clicked control, leave that alone.
+                                  requestAnimationFrame(() => {
+                                    const active = document.activeElement;
+                                    if (!active || active === document.body) {
+                                      addExtraLanguageRef.current?.focus();
+                                    }
+                                  });
+                                }}
+                              />
+                            ) : (
+                              <button
+                                ref={addExtraLanguageRef}
+                                type="button"
+                                onClick={() => setIsPickingExtraLanguage(true)}
+                                disabled={isAutoLanguage}
+                                className="inline-flex items-center gap-1 h-8 px-2.5 rounded border border-dashed border-border/70 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-border-hover transition-colors"
+                              >
+                                <Plus className="w-3 h-3" />
+                                {t("transcription.soniox.extraLanguagesAdd")}
                               </button>
-                            </span>
-                          );
-                        })}
-                        {visibleExtraLanguages.length < EXTRA_LANGUAGE_MAX &&
-                          (isPickingExtraLanguage ? (
-                            <LanguageSelector
-                              value=""
-                              onChange={addSonioxExtraLanguage}
-                              options={extraLanguagePickerOptions}
-                              placeholder={t("transcription.soniox.extraLanguagesAdd")}
-                              className="min-w-32"
-                              defaultOpen
-                              onClose={() => setIsPickingExtraLanguage(false)}
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setIsPickingExtraLanguage(true)}
-                              className="inline-flex items-center gap-1 h-8 px-2.5 rounded border border-dashed border-border/70 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-border-hover transition-colors"
-                            >
-                              <Plus className="w-3 h-3" />
-                              {t("transcription.soniox.extraLanguagesAdd")}
-                            </button>
-                          ))}
+                            ))}
+                        </div>
                       </div>
+                      {isAutoLanguage && (
+                        <p className="text-[10px] text-muted-foreground">
+                          {t("transcription.soniox.extraLanguagesAutoHint")}
+                        </p>
+                      )}
                     </div>
                   )}
 

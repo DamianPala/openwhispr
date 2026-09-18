@@ -870,13 +870,14 @@
       },
       "extraLanguages": "Extra Languages",
       "extraLanguagesAdd": "Add",
+      "extraLanguagesAutoHint": "Pick a main language to add extras.",
       "removeFillers": {
         "label": "Remove Filler Words",
         "description": "Drops \"um\", \"uh\", \"yyy\" before the text is pasted."
       },
       "keepAlive": {
         "label": "Keep-Alive",
-        "description": "Keeps the connection warm between recordings for an instant start, at extra cost.",
+        "description": "Keeps the connection warm between recordings for an instant start; idle time is billed as streaming.",
         "options": {
           "0": "Off",
           "30": "30 seconds (+50–100% cost)",

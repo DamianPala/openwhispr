@@ -870,13 +870,14 @@
       },
       "extraLanguages": "Idiomas adicionales",
       "extraLanguagesAdd": "Añadir",
+      "extraLanguagesAutoHint": "Elige un idioma principal para añadir idiomas adicionales.",
       "removeFillers": {
         "label": "Eliminar muletillas",
         "description": "Elimina \"um\", \"uh\", \"yyy\" antes de pegar el texto."
       },
       "keepAlive": {
         "label": "Mantener conexión",
-        "description": "Mantiene la conexión activa entre grabaciones para un inicio instantáneo, con coste adicional.",
+        "description": "Mantiene la conexión activa entre grabaciones para un inicio instantáneo; el tiempo inactivo se factura como streaming.",
         "options": {
           "0": "Desactivado",
           "30": "30 segundos (+50–100 % de coste)",

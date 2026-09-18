@@ -870,13 +870,14 @@
       },
       "extraLanguages": "追加言語",
       "extraLanguagesAdd": "追加",
+      "extraLanguagesAutoHint": "追加言語を設定するには、まずメイン言語を選んでください。",
       "removeFillers": {
         "label": "フィラーワードを削除",
         "description": "貼り付け前に \"um\"、\"uh\"、\"yyy\" などのフィラーワードを取り除きます。"
       },
       "keepAlive": {
         "label": "接続維持",
-        "description": "録音の間も接続を維持し、次回の録音を即座に開始できるようにします（追加料金がかかります）。",
+        "description": "録音の間も接続を維持して次回を即座に開始できるようにします。待機時間もストリーミングとして課金されます。",
         "options": {
           "0": "オフ",
           "30": "30秒（コスト +50〜100%）",

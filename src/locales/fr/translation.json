@@ -870,13 +870,14 @@
       },
       "extraLanguages": "Langues supplémentaires",
       "extraLanguagesAdd": "Ajouter",
+      "extraLanguagesAutoHint": "Choisissez une langue principale pour ajouter des langues supplémentaires.",
       "removeFillers": {
         "label": "Supprimer les mots de remplissage",
         "description": "Supprime \"um\", \"uh\", \"yyy\" avant que le texte soit collé."
       },
       "keepAlive": {
         "label": "Maintien de connexion",
-        "description": "Maintient la connexion active entre les enregistrements pour un démarrage instantané, moyennant un coût supplémentaire.",
+        "description": "Maintient la connexion active entre les enregistrements pour un démarrage instantané ; le temps d'inactivité est facturé comme du streaming.",
         "options": {
           "0": "Désactivé",
           "30": "30 secondes (+50–100 % de coût)",
