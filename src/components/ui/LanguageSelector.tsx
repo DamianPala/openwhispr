@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { ChevronDown, Search, X, Check } from "../icons";
@@ -79,7 +79,10 @@ export default function LanguageSelector({
     setPortalTarget((dialog as HTMLElement) ?? document.body);
   }, []);
 
-  useEffect(() => {
+  // Layout effect: with defaultOpen the menu exists from the first render, and
+  // a plain effect would paint one frame at (0, 0) with zero width before the
+  // position lands, which reads as the whole panel jumping.
+  useLayoutEffect(() => {
     if (isOpen && triggerRef.current && portalTarget) {
       const triggerRect = triggerRef.current.getBoundingClientRect();
       const target = portalTarget;
@@ -217,6 +220,7 @@ export default function LanguageSelector({
               top: `${dropdownPosition.top}px`,
               left: `${dropdownPosition.left}px`,
               width: `${dropdownPosition.width}px`,
+              visibility: dropdownPosition.width ? "visible" : "hidden",
             }}
             className="z-9999 bg-popover/95 backdrop-blur-xl border border-border/70 rounded shadow-xl overflow-hidden"
           >
