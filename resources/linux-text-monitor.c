@@ -43,12 +43,18 @@
 #include <unistd.h>
 #include <atspi/atspi.h>
 
+#ifndef TIMEOUT_SECONDS
 #define TIMEOUT_SECONDS 30
+#endif
 #define POLL_INTERVAL_MS 500
 #define MAX_OUTPUT_CHARS 10240
+#ifndef SEARCH_BUDGET_MS
 #define SEARCH_BUDGET_MS 2500
+#endif
 #define LIFETIME_SLACK_SECONDS 10
+#ifndef PROBE_LIFETIME_SECONDS
 #define PROBE_LIFETIME_SECONDS 10
+#endif
 
 static struct timespec search_deadline;
 static const char BASE64_TABLE[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -137,8 +143,12 @@ static void print_text_output(const char *name, const char *value) {
 static AtspiAccessible *find_focused(AtspiAccessible *accessible) {
     GError *error = NULL;
 
-    if (search_expired()) return NULL;
+    /* The node's own state costs nothing extra (has_state below is already
+     * paid for by the caller's ACTIVE check on the first level), so check it
+     * before the deadline: a node reached exactly at expiry must still be
+     * allowed to match instead of being dropped by search_expired(). */
     if (has_state(accessible, ATSPI_STATE_FOCUSED)) return g_object_ref(accessible);
+    if (search_expired()) return NULL;
 
     int count = atspi_accessible_get_child_count(accessible, &error);
     if (error) {
@@ -186,6 +196,38 @@ static AtspiAccessible *find_focused_in_active_window(AtspiAccessible *app) {
 
         AtspiAccessible *result = NULL;
         if (has_state(window, ATSPI_STATE_ACTIVE)) result = find_focused(window);
+        g_object_unref(window);
+        if (result) return result;
+    }
+
+    return NULL;
+}
+
+/* Pass 2's full walk: same application, but every ACTIVE toplevel was
+ * already exhausted by find_focused_in_active_window, so re-walking it here
+ * would spend the budget twice on the same subtree for nothing. */
+static AtspiAccessible *find_focused_skip_active_windows(AtspiAccessible *app) {
+    GError *error = NULL;
+
+    if (has_state(app, ATSPI_STATE_FOCUSED)) return g_object_ref(app);
+    if (search_expired()) return NULL;
+
+    int count = atspi_accessible_get_child_count(app, &error);
+    if (error) {
+        g_error_free(error);
+        return NULL;
+    }
+
+    for (int i = 0; i < count && !search_expired(); i++) {
+        AtspiAccessible *window = atspi_accessible_get_child_at_index(app, i, &error);
+        if (error) {
+            g_error_free(error);
+            error = NULL;
+            continue;
+        }
+        if (!window) continue;
+
+        AtspiAccessible *result = has_state(window, ATSPI_STATE_ACTIVE) ? NULL : find_focused(window);
         g_object_unref(window);
         if (result) return result;
     }
@@ -273,7 +315,7 @@ int main(int argc, char **argv) {
 
     arm_search_deadline();
     AtspiAccessible *focused = search_applications(desktop, find_focused_in_active_window);
-    if (!focused) focused = search_applications(desktop, find_focused);
+    if (!focused) focused = search_applications(desktop, find_focused_skip_active_windows);
 
     g_object_unref(desktop);
 
@@ -317,6 +359,16 @@ int main(int argc, char **argv) {
             }
         }
         printf("%s\n", editable ? "EDITABLE" : "NOT_EDITABLE");
+        fflush(stdout);
+        g_object_unref(focused);
+        return 0;
+    }
+
+    /* Monitor mode has no probe_editable gate, so it would otherwise read and
+     * emit a password field's value; refuse it here the same way the probe
+     * branch does (AT-SPI has no "protected" state, only the role). */
+    if (atspi_accessible_get_role(focused, NULL) == ATSPI_ROLE_PASSWORD_TEXT) {
+        printf("NO_VALUE\n");
         fflush(stdout);
         g_object_unref(focused);
         return 0;

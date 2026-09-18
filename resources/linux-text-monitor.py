@@ -138,6 +138,15 @@ def main():
         print("EDITABLE" if editable else "NOT_EDITABLE", flush=True)
         sys.exit(0)
 
+    # Monitor mode has no probe_editable gate, so it would otherwise read and
+    # emit a password field's value; refuse it the same way the probe branch does.
+    try:
+        if focused.get_role() == Atspi.Role.PASSWORD_TEXT:
+            print("NO_VALUE", flush=True)
+            sys.exit(0)
+    except Exception:
+        pass
+
     # Check if the element supports the Text interface
     try:
         text_iface = focused.get_text_iface()
