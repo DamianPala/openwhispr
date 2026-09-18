@@ -185,39 +185,47 @@ class ClipboardManager {
     if (process.platform !== "linux") return;
 
     const { isWayland } = getLinuxSessionInfo();
+    const writers = [
+      // wl-copy connects, offers the selection and forks a serving child before
+      // the parent exits; a compositor under load takes well over 100 ms for
+      // that handshake, and killing it mid-way leaves the selection unset.
+      isWayland && { tool: "wl-copy", args: ["--primary", "--", text], timeout: 300 },
+      { tool: "xclip", args: ["-selection", "primary"], input: text, timeout: 200 },
+      { tool: "xsel", args: ["--primary", "--input"], input: text, timeout: 200 },
+    ].filter(Boolean);
 
-    if (isWayland && this.commandExists("wl-copy")) {
+    const attempts = [];
+    for (const writer of writers) {
+      if (!this.commandExists(writer.tool)) continue;
+      const startedAt = performance.now();
+      let result;
       try {
-        const result = spawnSync("wl-copy", ["--primary", "--", text], {
-          timeout: 50,
+        result = spawnSync(writer.tool, writer.args, {
+          input: writer.input,
+          timeout: writer.timeout,
           stdio: SELECTION_OWNER_STDIO,
         });
-        if (result.status === 0) return;
-      } catch {}
+      } catch (error) {
+        result = { status: null, error };
+      }
+      const attempt = {
+        tool: writer.tool,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        status: result.status,
+        error: result.error?.code || null,
+      };
+      attempts.push(attempt);
+      if (result.status === 0) {
+        debugLogger.debug("Primary selection written", attempt, "clipboard");
+        return;
+      }
     }
 
-    if (this.commandExists("xclip")) {
-      try {
-        const result = spawnSync("xclip", ["-selection", "primary"], {
-          input: text,
-          timeout: 200,
-          stdio: SELECTION_OWNER_STDIO,
-        });
-        if (result.status === 0) return;
-      } catch {}
-    }
-
-    if (this.commandExists("xsel")) {
-      try {
-        const result = spawnSync("xsel", ["--primary", "--input"], {
-          input: text,
-          timeout: 200,
-          stdio: SELECTION_OWNER_STDIO,
-        });
-        if (result.status === 0) return;
-      } catch {}
-    }
-
+    debugLogger.warn(
+      "Primary selection tools failed, falling back to Electron's selection target",
+      { attempts },
+      "clipboard"
+    );
     try {
       clipboard.writeText(text, "selection");
     } catch {}
