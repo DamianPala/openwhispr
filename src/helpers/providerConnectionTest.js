@@ -11,6 +11,9 @@ const ENDPOINTS = {
   deepgram: "https://api.deepgram.com/v1/models",
   // AssemblyAI exposes no model list; listing transcripts is its 200-vs-401 probe.
   assemblyai: "https://api.assemblyai.com/v2/transcript?limit=1",
+  // Soniox's /v1/models is OpenAI-adjacent ({models:[{id}]}), already covered
+  // by the models[].id branch in responseModelIds below.
+  soniox: "https://api.soniox.com/v1/models",
 };
 
 // Neither response is OpenAI-shaped — Deepgram's /v1/models is {stt,tts}-keyed
@@ -254,6 +257,8 @@ function normalizeModelId(value) {
     .replace(/^models\//i, "");
 }
 
+// data[] is OpenAI-shaped ({id}), models[] covers both Gemini ({name}) and
+// Soniox ({id}) — the id-or-name fallback below reads either.
 function responseModelIds(payload) {
   const models = Array.isArray(payload)
     ? payload

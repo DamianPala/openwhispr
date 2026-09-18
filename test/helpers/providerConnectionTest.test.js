@@ -21,7 +21,7 @@ test("honors OpenAI base URL overrides from the environment", () => {
   }
 });
 
-test("the realtime STT providers use their own auth schemes, not Bearer", () => {
+test("the realtime STT providers resolve their own endpoints and auth schemes", () => {
   const deepgram = resolveProviderRequest({ provider: "deepgram", apiKey: "dg-secret" });
   assert.equal(deepgram.endpoint, "https://api.deepgram.com/v1/models");
   assert.equal(deepgram.endpoint.includes("dg-secret"), false);
@@ -31,6 +31,12 @@ test("the realtime STT providers use their own auth schemes, not Bearer", () => 
   assert.equal(assemblyai.endpoint, "https://api.assemblyai.com/v2/transcript?limit=1");
   assert.equal(assemblyai.endpoint.includes("aai-secret"), false);
   assert.equal(assemblyai.headers.Authorization, "aai-secret");
+
+  // Soniox has no bespoke auth scheme — Bearer is the default branch.
+  const soniox = resolveProviderRequest({ provider: "soniox", apiKey: "sx-secret" });
+  assert.equal(soniox.endpoint, "https://api.soniox.com/v1/models");
+  assert.equal(soniox.endpoint.includes("sx-secret"), false);
+  assert.equal(soniox.headers.Authorization, "Bearer sx-secret");
 });
 
 // Neither payload is OpenAI-shaped, so responseOffersModel would report
@@ -226,6 +232,44 @@ test("accepts selected models from OpenAI and Gemini model-list shapes", async (
       { success: true }
     );
   }
+});
+
+test("verifies the selected Soniox model from its models[].id shape", async () => {
+  assert.deepEqual(
+    await testProviderConnection(
+      { provider: "soniox", apiKey: "k", model: "stt-rt-v5" },
+      async () => ({ ok: true, status: 200, json: async () => ({ models: [{ id: "stt-rt-v5" }] }) })
+    ),
+    { success: true }
+  );
+
+  assert.deepEqual(
+    await testProviderConnection(
+      { provider: "soniox", apiKey: "k", model: "stt-rt-v9" },
+      async () => ({ ok: true, status: 200, json: async () => ({ models: [{ id: "stt-rt-v5" }] }) })
+    ),
+    {
+      success: false,
+      errorCode: "modelNotFound",
+      error: "The selected model is not available from this provider.",
+    }
+  );
+
+  assert.deepEqual(
+    await testProviderConnection(
+      { provider: "soniox", apiKey: "bad", model: "stt-rt-v5" },
+      async () => ({
+        ok: false,
+        status: 401,
+      })
+    ),
+    {
+      success: false,
+      errorCode: "credentialsRejected",
+      error: "The provider rejected these credentials.",
+      status: 401,
+    }
+  );
 });
 
 test("continues to a compatible candidate when an earlier model list omits the selection", async () => {
