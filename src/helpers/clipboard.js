@@ -181,18 +181,27 @@ class ClipboardManager {
   // there so Shift+Insert pastes reliably regardless of which selection the
   // terminal uses. Falls through wl-copy → xclip → xsel → Electron's selection
   // target so we cover Wayland, X11, and XWayland setups.
+  //
+  // KDE goes X11 first: KWin has no data-control protocol, so wl-copy and
+  // wl-paste can only touch a selection by mapping an invisible surface and
+  // taking keyboard focus for the duration. That focus flip lands right
+  // before the Shift+Insert, and a keystroke arriving while focus is still
+  // on that surface (or on its way back) never reaches the target. KWin's
+  // Xwayland bridge mirrors X11 PRIMARY into the Wayland primary selection
+  // without moving focus.
   _writePrimarySelection(text) {
     if (process.platform !== "linux") return;
 
-    const { isWayland } = getLinuxSessionInfo();
-    const writers = [
-      // wl-copy connects, offers the selection and forks a serving child before
-      // the parent exits; a compositor under load takes well over 100 ms for
-      // that handshake, and killing it mid-way leaves the selection unset.
-      isWayland && { tool: "wl-copy", args: ["--primary", "--", text], timeout: 300 },
+    const { isWayland, isKde } = getLinuxSessionInfo();
+    const x11Writers = [
       { tool: "xclip", args: ["-selection", "primary"], input: text, timeout: 200 },
       { tool: "xsel", args: ["--primary", "--input"], input: text, timeout: 200 },
-    ].filter(Boolean);
+    ];
+    // wl-copy connects, offers the selection and forks a serving child before
+    // the parent exits; a compositor under load takes well over 100 ms for
+    // that handshake, and killing it mid-way leaves the selection unset.
+    const wlCopy = isWayland && { tool: "wl-copy", args: ["--primary", "--", text], timeout: 300 };
+    const writers = (isKde ? [...x11Writers, wlCopy] : [wlCopy, ...x11Writers]).filter(Boolean);
 
     const attempts = [];
     for (const writer of writers) {
@@ -234,9 +243,11 @@ class ClipboardManager {
   _readPrimarySelection() {
     if (process.platform !== "linux") return null;
 
-    const { isWayland } = getLinuxSessionInfo();
+    const { isWayland, isKde } = getLinuxSessionInfo();
 
-    if (isWayland && this.commandExists("wl-paste")) {
+    // KDE: wl-paste steals keyboard focus to read (see _writePrimarySelection),
+    // and the bridged X11 PRIMARY carries the same text.
+    if (isWayland && !isKde && this.commandExists("wl-paste")) {
       try {
         const result = spawnSync("wl-paste", ["--primary", "--no-newline"], { timeout: 200 });
         if (result.status === 0) return result.stdout.toString();
