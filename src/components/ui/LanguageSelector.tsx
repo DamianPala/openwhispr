@@ -26,9 +26,8 @@ interface LanguageSelectorProps {
   // Seeds isOpen so a caller that swaps its own trigger for this component
   // (e.g. an "Add" button) can hand it over already expanded.
   defaultOpen?: boolean;
-  // Fired whenever the dropdown closes without a caller-owned onChange having
-  // just fired for it: click-outside, Escape, and (redundantly, but harmless)
-  // right after a selection. Lets a caller that replaced its own trigger with
+  // Fired whenever the dropdown closes: click-outside, Escape, a click on the
+  // trigger while open, and (redundantly, but harmless) right after a selection. Lets a caller that replaced its own trigger with
   // this component know when to swap back, including the cancel paths.
   onClose?: () => void;
 }
@@ -180,7 +179,15 @@ export default function LanguageSelector({
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          if (isOpen) {
+            setIsOpen(false);
+            handleSearchQueryChange("");
+            onClose?.();
+            return;
+          }
+          setIsOpen(true);
+        }}
         onKeyDown={handleKeyDown}
         className={`
           group relative w-full flex items-center justify-between gap-2
