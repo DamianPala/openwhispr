@@ -877,7 +877,7 @@
       },
       "keepAlive": {
         "label": "Keep-Alive",
-        "description": "Hält die Verbindung zwischen Aufnahmen für einen sofortigen Start aufrecht; Leerlaufzeit wird als Streaming abgerechnet.",
+        "description": "Hält die Verbindung zwischen Aufnahmen offen, damit die nächste sofort startet. Soniox berechnet die Leerlaufzeit als Streaming.",
         "options": {
           "0": "Aus",
           "30": "30 Sekunden (+50–100 % Kosten)",

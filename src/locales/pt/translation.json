@@ -856,7 +856,7 @@
       },
       "keepAlive": {
         "label": "Manter conexão",
-        "description": "Mantém a conexão ativa entre gravações para um início instantâneo; o tempo ocioso é cobrado como streaming.",
+        "description": "Mantém a conexão aberta entre gravações para que a próxima comece na hora. A Soniox cobra o tempo ocioso como streaming.",
         "options": {
           "0": "Desativado",
           "30": "30 segundos (+50–100% de custo)",

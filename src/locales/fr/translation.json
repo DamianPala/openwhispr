@@ -877,7 +877,7 @@
       },
       "keepAlive": {
         "label": "Maintien de connexion",
-        "description": "Maintient la connexion active entre les enregistrements pour un démarrage instantané ; le temps d'inactivité est facturé comme du streaming.",
+        "description": "Garde la connexion ouverte entre les enregistrements pour que le suivant démarre aussitôt. Soniox facture le temps d'inactivité comme du streaming.",
         "options": {
           "0": "Désactivé",
           "30": "30 secondes (+50–100 % de coût)",

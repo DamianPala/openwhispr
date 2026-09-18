@@ -877,7 +877,7 @@
       },
       "keepAlive": {
         "label": "Keep-Alive",
-        "description": "Keeps the connection warm between recordings for an instant start; idle time is billed as streaming.",
+        "description": "Keeps the connection open between recordings so the next one starts right away. Soniox bills the idle time as streaming.",
         "options": {
           "0": "Off",
           "30": "30 seconds (+50–100% cost)",

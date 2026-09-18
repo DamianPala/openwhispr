@@ -877,7 +877,7 @@
       },
       "keepAlive": {
         "label": "Keep-Alive",
-        "description": "Mantiene attiva la connessione tra le registrazioni per un avvio istantaneo; il tempo di inattività è fatturato come streaming.",
+        "description": "Tiene aperta la connessione tra le registrazioni così la successiva parte subito. Soniox addebita il tempo di inattività come streaming.",
         "options": {
           "0": "Disattivato",
           "30": "30 secondi (+50–100% di costo)",
