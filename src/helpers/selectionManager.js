@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const { execFile, spawn } = require("child_process");
 const debugLogger = require("./debugLogger");
+const { getLinuxSessionInfo } = require("./linuxSession");
 
 const SESSION_TTL_MS = 5 * 60 * 1000;
 const MAX_SELECTION_EDIT_CODE_POINTS = 6000;

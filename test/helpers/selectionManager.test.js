@@ -574,6 +574,72 @@ test("a terminal target reads as no selection", async () => {
   assert.deepEqual(result.target, terminalTarget);
 });
 
+// Regression for the missing `getLinuxSessionInfo` import (found by the fork
+// review, N1): the KDE portal-paste branch called it without requiring
+// `./linuxSession`, so every KDE selection capture that fell through to the
+// portal threw a ReferenceError, which the catch below recorded as a portal
+// failure and disabled the portal for the rest of the session.
+function withEnv(overrides, fn) {
+  const original = {};
+  for (const key of Object.keys(overrides)) original[key] = process.env[key];
+  Object.assign(process.env, overrides);
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const key of Object.keys(overrides)) {
+        if (original[key] === undefined) delete process.env[key];
+        else process.env[key] = original[key];
+      }
+    });
+}
+
+test("a KDE Wayland portal capture passes keycodes and does not record a portal failure", async () => {
+  await withEnv({ XDG_SESSION_TYPE: "wayland", XDG_CURRENT_DESKTOP: "KDE" }, async () => {
+    const writes = [];
+    const portalCalls = [];
+    let copySent = false;
+    const clipboardManager = {
+      runClipboardOperation: (operation) => operation(),
+      resolveLinuxFastPasteBinary: () => "/bin/linux-fast-paste",
+      isLinuxTerminalWindowClass: () => false,
+      _canAccessUinput: () => false,
+      portalDenied: false,
+      portalUnavailable: false,
+      portalFailed: false,
+      _runPortalPaste: async (binary, options) => {
+        portalCalls.push({ binary, options });
+        copySent = true;
+      },
+      _saveClipboard: () => ({ type: "text", data: "user clipboard" }),
+      _restoreClipboard: () => {},
+      _writeClipboardTextAll: (text) => writes.push(text),
+      _readClipboardTextAll: () => {
+        if (writes.length === 0) return ["user clipboard"];
+        return copySent ? ["the selected text", writes[0]] : [writes[0]];
+      },
+    };
+    const manager = new SelectionManager({
+      clipboardManager,
+      platform: "linux",
+      now: () => 1000,
+    });
+    manager._getLinuxTarget = async () => ({
+      kind: "kde-window",
+      id: "9",
+      windowClass: "org.kde.kate",
+    });
+
+    const result = await manager._readLinuxSelection(null);
+
+    assert.equal(portalCalls.length, 1);
+    assert.equal(portalCalls[0].binary, "/bin/linux-fast-paste");
+    assert.deepEqual(portalCalls[0].options, { copy: true, terminal: false, keycodes: true });
+    assert.equal(clipboardManager.portalFailed, false);
+    assert.equal(result.status, "selected");
+    assert.equal(result.text, "the selected text");
+  });
+});
+
 // macOS accessibility never resolves a focused element in Chromium browsers, so
 // a synthetic ⌘C is the only way to tell a real selection from an empty field.
 function makeMacClipboardHarness({ copyOutput = "COPY_OK 42 Dia", copied = null } = {}) {
