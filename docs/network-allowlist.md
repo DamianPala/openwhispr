@@ -85,6 +85,10 @@ provider. Skip any provider not in use.
 
 ## Notes
 
+- `SONIOX_WS_URL` in the app's `.env` replaces the region host for a
+  self-hosted proxy: `wss://` for any host, `ws://` only for private or
+  loopback addresses, no credentials in the URL; invalid values are ignored
+  with a warning.
 - The app uses Electron's network stack, which honors system proxy settings
   (macOS System Settings, Windows Internet Options / WPAD, GNOME proxy) and
   PAC scripts on all platforms.
