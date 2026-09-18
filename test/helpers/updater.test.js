@@ -44,7 +44,7 @@ function makeAutoUpdater({ offline = false } = {}) {
 
 // updater.js requires electron and child_process lazily (constructor, cleanup(),
 // Rosetta probe), so the mocks stay installed until afterEach.
-function createUpdateManager(autoUpdater) {
+function createUpdateManager(autoUpdater, options) {
   delete require.cache[updaterModulePath];
   Module._load = function loadWithMocks(request, parent, isMain) {
     if (request === "electron-updater") return { autoUpdater };
@@ -53,7 +53,7 @@ function createUpdateManager(autoUpdater) {
     return originalLoad.call(this, request, parent, isMain);
   };
   const UpdateManager = require(updaterModulePath);
-  return new UpdateManager();
+  return new UpdateManager(options);
 }
 
 function makeRendererWindow(sent) {
@@ -90,7 +90,7 @@ test("startup and periodic checks run whether or not automatic updates are on", 
   for (const enabled of [true, false, null]) {
     t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     const autoUpdater = makeAutoUpdater();
-    const manager = createUpdateManager(autoUpdater);
+    const manager = createUpdateManager(autoUpdater, { updateChecksDisabled: false });
     if (enabled !== null) manager.setAutoUpdatesEnabled(enabled);
 
     manager.checkForUpdatesOnStartup();
@@ -106,7 +106,7 @@ test("startup and periodic checks run whether or not automatic updates are on", 
 
 test("before the renderer syncs the preference, an available update is not downloaded", () => {
   const autoUpdater = makeAutoUpdater();
-  const manager = createUpdateManager(autoUpdater);
+  const manager = createUpdateManager(autoUpdater, { updateChecksDisabled: false });
 
   autoUpdater.listeners["update-available"]({ version: "9.9.9" });
   assert.equal(autoUpdater.downloads, 0);
@@ -116,7 +116,7 @@ test("before the renderer syncs the preference, an available update is not downl
 
 test("with automatic updates on, an available update downloads itself exactly once", () => {
   const autoUpdater = makeAutoUpdater();
-  const manager = createUpdateManager(autoUpdater);
+  const manager = createUpdateManager(autoUpdater, { updateChecksDisabled: false });
   manager.setAutoUpdatesEnabled(true);
 
   autoUpdater.listeners["update-available"]({ version: "9.9.9" });
@@ -135,7 +135,7 @@ test("with automatic updates on, an available update downloads itself exactly on
 
 test("with automatic updates off, an available update waits for the user", () => {
   const autoUpdater = makeAutoUpdater();
-  const manager = createUpdateManager(autoUpdater);
+  const manager = createUpdateManager(autoUpdater, { updateChecksDisabled: false });
   manager.setAutoUpdatesEnabled(false);
 
   autoUpdater.listeners["update-available"]({ version: "9.9.9" });
@@ -171,7 +171,7 @@ test("only a macOS update that Squirrel already holds counts as staged", () => {
 
 test("enabling automatic updates after the startup check found one starts the download", () => {
   const autoUpdater = makeAutoUpdater();
-  const manager = createUpdateManager(autoUpdater);
+  const manager = createUpdateManager(autoUpdater, { updateChecksDisabled: false });
 
   autoUpdater.listeners["update-available"]({ version: "9.9.9" });
   assert.equal(autoUpdater.downloads, 0, "preference unknown, so nothing downloads yet");
@@ -188,7 +188,7 @@ test("enabling automatic updates after the startup check found one starts the do
 test("a failed background check only reaches renderers as update-error", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const autoUpdater = makeAutoUpdater({ offline: true });
-  const manager = createUpdateManager(autoUpdater);
+  const manager = createUpdateManager(autoUpdater, { updateChecksDisabled: false });
   const sent = [];
   manager.setWindowManager({
     mainWindow: makeRendererWindow(sent),
@@ -222,7 +222,7 @@ test("a Linux AppImage is supported, but deb/rpm/tar.gz installs never touch the
 
   delete process.env.APPIMAGE;
   const autoUpdater = makeAutoUpdater();
-  const packaged = createUpdateManager(autoUpdater);
+  const packaged = createUpdateManager(autoUpdater, { updateChecksDisabled: false });
   packaged.setAutoUpdatesEnabled(true);
   assert.equal((await packaged.getUpdateStatus()).isSupported, false);
 
@@ -236,4 +236,41 @@ test("a Linux AppImage is supported, but deb/rpm/tar.gz installs never touch the
   assert.match(result.message, /package manager/);
 
   packaged.cleanup();
+});
+
+test("with update checks disabled (the default), startup schedules nothing", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const autoUpdater = makeAutoUpdater();
+  const manager = createUpdateManager(autoUpdater);
+
+  manager.checkForUpdatesOnStartup();
+  t.mock.timers.tick(STARTUP_DELAY_MS + PERIODIC_INTERVAL_MS);
+  assert.equal(autoUpdater.calls, 0);
+
+  manager.cleanup();
+});
+
+test("with update checks disabled (the default), a manual check never reaches the feed", async () => {
+  const autoUpdater = makeAutoUpdater();
+  const manager = createUpdateManager(autoUpdater);
+
+  const result = await manager.checkForUpdates();
+  assert.equal(autoUpdater.calls, 0);
+  assert.deepEqual(result, {
+    updateAvailable: false,
+    message: "Update checks are turned off in this build",
+  });
+
+  manager.cleanup();
+});
+
+test("with update checks disabled (the default), downloadUpdate never reaches the feed", async () => {
+  const autoUpdater = makeAutoUpdater();
+  const manager = createUpdateManager(autoUpdater);
+
+  const result = await manager.downloadUpdate();
+  assert.equal(autoUpdater.downloads, 0);
+  assert.equal(result.success, false);
+
+  manager.cleanup();
 });

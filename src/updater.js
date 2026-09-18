@@ -4,8 +4,14 @@ const { autoUpdater } = require("electron-updater");
 // installs are updated by the package manager instead.
 const isUpdaterSupported = process.platform !== "linux" || Boolean(process.env.APPIMAGE);
 
+// This fork's builds are unsigned and published as prereleases only, so
+// electron-updater's GET /repos/.../releases/latest 404s and every check logs
+// "Auto-updater error". Re-enable once builds are signed and a non-prerelease
+// release carries the latest*.yml manifests.
+const UPDATE_CHECKS_DISABLED = true;
+
 class UpdateManager {
-  constructor() {
+  constructor({ updateChecksDisabled = UPDATE_CHECKS_DISABLED } = {}) {
     this.updateAvailable = false;
     this.updateDownloaded = false;
     this.lastUpdateInfo = null;
@@ -18,6 +24,7 @@ class UpdateManager {
     this.windowManager = null;
     // null until the renderer syncs the preference, so nothing downloads unasked.
     this.autoUpdatesEnabled = null;
+    this.updateChecksDisabled = updateChecksDisabled;
 
     this.setupAutoUpdater();
   }
@@ -174,6 +181,13 @@ class UpdateManager {
         };
       }
 
+      if (this.updateChecksDisabled) {
+        return {
+          updateAvailable: false,
+          message: "Update checks are turned off in this build",
+        };
+      }
+
       console.log("🔍 Checking for updates...");
       const result = await autoUpdater.checkForUpdates();
 
@@ -205,6 +219,13 @@ class UpdateManager {
         return {
           success: false,
           message: "Update downloads are disabled in development mode",
+        };
+      }
+
+      if (this.updateChecksDisabled) {
+        return {
+          success: false,
+          message: "Update checks are turned off in this build",
         };
       }
 
@@ -341,6 +362,8 @@ class UpdateManager {
   }
 
   checkForUpdatesOnStartup() {
+    if (this.updateChecksDisabled) return;
+
     if (process.env.NODE_ENV !== "development" && isUpdaterSupported) {
       setTimeout(() => {
         this._autoCheckForUpdates("Startup");
