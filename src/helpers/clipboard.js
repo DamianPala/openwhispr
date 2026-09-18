@@ -96,8 +96,6 @@ class ClipboardManager {
     this.portalDenied = false;
     this.portalUnavailable = false;
     this.portalTokenPasteFailed = false;
-    this.portalKeysymChecked = false;
-    this.portalKeysymAvailable = false;
     this.portalFailed = false;
     this.uinputTimedOut = false;
     this.xtestTimedOut = false;
@@ -198,10 +196,20 @@ class ClipboardManager {
       { tool: "xsel", args: ["--primary", "--input"], input: text, timeout: 200 },
     ];
     // wl-copy connects, offers the selection and forks a serving child before
-    // the parent exits; a compositor under load takes well over 100 ms for
-    // that handshake, and killing it mid-way leaves the selection unset.
-    const wlCopy = isWayland && { tool: "wl-copy", args: ["--primary", "--", text], timeout: 300 };
-    const writers = (isKde ? [...x11Writers, wlCopy] : [wlCopy, ...x11Writers]).filter(Boolean);
+    // the parent exits; on KDE that handshake also flips keyboard focus, so it
+    // is the last-resort fallback there and gets a longer budget (measured
+    // over 100 ms under load) instead of upstream's fast-path value.
+    let writers;
+    if (!isWayland) {
+      writers = x11Writers;
+    } else {
+      const wlCopy = {
+        tool: "wl-copy",
+        args: ["--primary", "--", text],
+        timeout: isKde ? 300 : 50,
+      };
+      writers = isKde ? [...x11Writers, wlCopy] : [wlCopy, ...x11Writers];
+    }
 
     const attempts = [];
     for (const writer of writers) {
@@ -285,12 +293,12 @@ class ClipboardManager {
     return this.isTerminalSignature(windowClass);
   }
 
-  // Selection capture (SelectionManager) seeds a sentinel and polls until a
-  // synthetic copy replaces it. On Wayland — KDE especially — the X11 and
-  // Wayland clipboards can be desynced, so write and read BOTH sides; a value
-  // appearing on either side counts.
+  // Selection capture (SelectionManager) polls both clipboard tools for a
+  // synthetic copy. KDE skips wl-copy/wl-paste — they steal keyboard focus
+  // per call (see _writePrimarySelection) — relying on KWin's Xwayland bridge.
   _writeClipboardTextAll(text) {
-    if (this._isWayland() && this.commandExists("wl-copy")) {
+    const { isKde } = getLinuxSessionInfo();
+    if (this._isWayland() && !isKde && this.commandExists("wl-copy")) {
       try {
         spawnSync("wl-copy", ["--", text], { timeout: 200, stdio: SELECTION_OWNER_STDIO });
       } catch {}
@@ -318,7 +326,8 @@ class ClipboardManager {
 
   _readClipboardTextAll() {
     const texts = [];
-    if (this._isWayland() && this.commandExists("wl-paste")) {
+    const { isKde } = getLinuxSessionInfo();
+    if (this._isWayland() && !isKde && this.commandExists("wl-paste")) {
       try {
         const result = spawnSync("wl-paste", ["--no-newline"], { timeout: 200 });
         if (result.status === 0) texts.push(result.stdout.toString());
@@ -638,9 +647,17 @@ class ClipboardManager {
   // Shift+Insert into Ctrl+Shift+Insert, which no target treats as paste
   // (Kate: "paste selection"). Blocks until the physical modifiers are up,
   // 1 s at most; the paste goes ahead either way and the log says what held.
+  // All-Linux: X11 merges XTest and physical modifier state the same way, so
+  // this isn't KDE-specific.
   _waitForPhysicalModifiers(linuxFastPaste) {
     if (!linuxFastPaste || !this._fastPasteHasCapability(linuxFastPaste, "wait-modifiers-v1")) {
       return Promise.resolve(null);
+    }
+    // Group membership can't change without a re-login, so a "no-devices"
+    // answer (no readable /dev/input node) is a per-process constant — cache
+    // it instead of paying the sysfs scan on every paste.
+    if (this._noDevicesDetails) {
+      return Promise.resolve(this._noDevicesDetails);
     }
     const started = Date.now();
     return new Promise((resolve) => {
@@ -658,7 +675,14 @@ class ClipboardManager {
           held: held || null,
           elapsedMs: Date.now() - started,
         };
-        if (result === "timeout") {
+        if (result === "no-devices") {
+          this._noDevicesDetails = details;
+          debugLogger.info(
+            "modifier wait unavailable: no readable /dev/input devices, user not in the input group?",
+            details,
+            "clipboard"
+          );
+        } else if (result === "timeout") {
           debugLogger.warn("Physical modifiers still held, pasting anyway", details, "clipboard");
         } else if (result !== "released" || details.waitedMs > 0) {
           debugLogger.debug("Waited for physical modifiers", details, "clipboard");
@@ -710,7 +734,10 @@ class ClipboardManager {
       proc.stdout.on("data", (chunk) => {
         stdout += chunk;
       });
-      proc.on("error", () => resolve(null));
+      proc.on("error", () => {
+        clearTimeout(timer);
+        resolve(null);
+      });
       proc.on("close", (code) => {
         clearTimeout(timer);
         const cls = code === 0 ? stdout.trim().toLowerCase() : "";
@@ -1621,7 +1648,7 @@ class ClipboardManager {
     const preDetectTargetWindow = () => {
       if (!xdotoolExists || (isWayland && !xwaylandAvailable)) return null;
       try {
-        const result = spawnSync("xdotool", ["getactivewindow"]);
+        const result = spawnSync("xdotool", ["getactivewindow"], { timeout: 1000 });
         return result.status === 0 ? result.stdout.toString().trim() || null : null;
       } catch {
         return null;
@@ -1634,7 +1661,7 @@ class ClipboardManager {
         const args = windowId
           ? ["getwindowclassname", windowId]
           : ["getactivewindow", "getwindowclassname"];
-        const result = spawnSync("xdotool", args);
+        const result = spawnSync("xdotool", args, { timeout: 1000 });
         return result.status === 0 ? result.stdout.toString().toLowerCase().trim() || null : null;
       } catch {
         return null;
@@ -1686,7 +1713,14 @@ class ClipboardManager {
     const targetWindowId = preDetectTargetWindow();
     let detectedWindowClass = preDetectWindowClass(targetWindowId);
 
-    await this._waitForPhysicalModifiers(linuxFastPaste);
+    // The Hyprland dispatch below is delivered by the compositor straight to
+    // the window, bypassing input injection, so held modifiers can't corrupt
+    // it; skip the wait only when we know that path will fire (no wtype).
+    const skipsModifierWaitForHyprlandDispatch =
+      isHyprland && !wtypeExists && this.commandExists("hyprctl");
+    if (!skipsModifierWaitForHyprlandDispatch) {
+      await this._waitForPhysicalModifiers(linuxFastPaste);
+    }
 
     // ydotool 0.1.x (Ubuntu 24.04) uses key names; 1.0.x uses raw keycodes.
     // Shift+Insert avoids KEY_V's layout-sensitive position.
@@ -1852,6 +1886,10 @@ class ClipboardManager {
         { error: lastDispatcherError?.message },
         "clipboard"
       );
+      // Everything below injects physical keys, so the deferred wait is due.
+      if (skipsModifierWaitForHyprlandDispatch) {
+        await this._waitForPhysicalModifiers(linuxFastPaste);
+      }
     }
 
     if (linuxFastPaste && !skipFastPasteForKonsole) {
@@ -2468,17 +2506,7 @@ Would you like to open System Settings now?`;
     const hasNativeBinary = !!linuxFastPaste;
     let portalKeysymAvailable = false;
     if (linuxFastPaste && isWayland && (isGnome || isKde)) {
-      // spawnSync blocks the main process, so probe the binary only once.
-      if (!this.portalKeysymChecked) {
-        this.portalKeysymChecked = true;
-        try {
-          const result = spawnSync(linuxFastPaste, ["--capabilities"], { timeout: 1000 });
-          this.portalKeysymAvailable =
-            result.status === 0 &&
-            result.stdout.toString().split(/\s+/).includes("portal-keysym-v1");
-        } catch {}
-      }
-      portalKeysymAvailable = this.portalKeysymAvailable;
+      portalKeysymAvailable = this._fastPasteHasCapability(linuxFastPaste, "portal-keysym-v1");
     }
 
     const tools = [];
