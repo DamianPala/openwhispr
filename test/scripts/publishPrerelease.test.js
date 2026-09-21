@@ -252,3 +252,28 @@ test("fails before any gh call when the tag version does not start with the AppI
   assert.match(result.stderr, /does not start with/);
   assert.deepEqual(readLogLines(fixture), []);
 });
+
+test("--target and the notes' Built-from line use the passed-in GITHUB_SHA, not the dispatching commit", (t) => {
+  const fixture = makeFixture(t);
+  // A realistic-looking headSha, resolved by fork-prerelease.yml from the build
+  // run and deliberately different from the module-level GITHUB_SHA constant
+  // (which stands in for whatever commit merely dispatched the workflow).
+  const BUILD_SHA = "9f1c2b3a4d5e6f708900aabbccddeeff11223344";
+
+  const result = runScript(fixture, { GITHUB_SHA: BUILD_SHA });
+  assert.equal(result.status, 0, result.stderr);
+
+  const logLines = readLogLines(fixture);
+  const createLines = logLines.filter((line) => line.startsWith("release create"));
+  assert.equal(createLines.length, 1);
+  assert.match(createLines[0], new RegExp(`--target ${BUILD_SHA}\\b`));
+
+  const editLines = logLines.filter((line) => line.startsWith("release edit"));
+  const tokens = editLines[0].split(/\s+/);
+  const notesPath = tokens[tokens.indexOf("--notes-file") + 1];
+  const renderedNotes = fs.readFileSync(notesPath, "utf8");
+  assert.ok(
+    renderedNotes.includes(`Built from \`${BUILD_SHA}\``),
+    "notes credit the resolved build SHA, not the dispatching commit"
+  );
+});
