@@ -4,10 +4,10 @@
  *
  * Strategy:
  * 1. If binary exists and is up-to-date, do nothing
- * 2. Try to download prebuilt binary from GitHub releases
- * 3. Fall back to local compilation if download fails
+ * 2. Compile locally when the AT-SPI2 dev headers are present
+ * 3. Fall back to the prebuilt binary from GitHub releases
  *
- * This allows developers without AT-SPI2 dev headers to still build the app.
+ * The download keeps builds working for developers without AT-SPI2 dev headers.
  */
 
 const { spawnSync } = require("child_process");
@@ -16,15 +16,17 @@ const fs = require("fs");
 const path = require("path");
 
 const isLinux = process.platform === "linux";
-if (!isLinux) {
-  process.exit(0);
-}
 
 const projectRoot = path.resolve(__dirname, "..");
 const cSource = path.join(projectRoot, "resources", "linux-text-monitor.c");
 const outputDir = path.join(projectRoot, "resources", "bin");
 const outputBinary = path.join(outputDir, "linux-text-monitor");
 const hashFile = path.join(outputDir, ".linux-text-monitor.hash");
+
+// Written to the hash file instead of a source hash when the binary came
+// from tryDownload(): a downloaded binary predates this checkout's source,
+// so it is never "up to date" the way a matching hash means, only usable.
+const DOWNLOADED_MARKER = "downloaded";
 
 function log(message) {
   console.log(`[linux-text-monitor] ${message}`);
@@ -36,18 +38,57 @@ function ensureDir(dirPath) {
   }
 }
 
-function isBinaryUpToDate() {
-  if (!fs.existsSync(outputBinary)) {
+function computeSourceHash(sourcePath, pkgFlags) {
+  const flagStr = pkgFlags ? pkgFlags.join(" ") : "";
+  const sourceContent = fs.readFileSync(sourcePath, "utf8");
+  return crypto
+    .createHash("sha256")
+    .update(sourceContent + flagStr)
+    .digest("hex");
+}
+
+// True when hashFile pins the binary to source it no longer matches, or to a
+// download that a now-available compiler should replace with a local build.
+function isBinaryStale(sourcePath, hashPath, getFlags) {
+  if (!fs.existsSync(hashPath)) {
+    fs.writeFileSync(hashPath, computeSourceHash(sourcePath, getFlags()));
     return false;
   }
 
-  if (!fs.existsSync(cSource)) {
+  const savedHash = fs.readFileSync(hashPath, "utf8").trim();
+  if (savedHash === DOWNLOADED_MARKER) {
+    if (getFlags()) {
+      log("Downloaded binary is stale now that a compiler is available, rebuild needed");
+      return true;
+    }
+    return false;
+  }
+
+  if (savedHash !== computeSourceHash(sourcePath, getFlags())) {
+    log("Source or build flags changed, rebuild needed");
+    return true;
+  }
+
+  return false;
+}
+
+function isBinaryUpToDate(
+  binaryPath = outputBinary,
+  sourcePath = cSource,
+  hashPath = hashFile,
+  getFlags = getPkgConfigFlags
+) {
+  if (!fs.existsSync(binaryPath)) {
+    return false;
+  }
+
+  if (!fs.existsSync(sourcePath)) {
     return true;
   }
 
   try {
-    const binaryStat = fs.statSync(outputBinary);
-    const sourceStat = fs.statSync(cSource);
+    const binaryStat = fs.statSync(binaryPath);
+    const sourceStat = fs.statSync(sourcePath);
     if (binaryStat.mtimeMs < sourceStat.mtimeMs) {
       return false;
     }
@@ -55,31 +96,12 @@ function isBinaryUpToDate() {
     return false;
   }
 
-  // Check source + build flags hash
   try {
-    const pkgFlags = getPkgConfigFlags();
-    const flagStr = pkgFlags ? pkgFlags.join(" ") : "";
-    const sourceContent = fs.readFileSync(cSource, "utf8");
-    const currentHash = crypto
-      .createHash("sha256")
-      .update(sourceContent + flagStr)
-      .digest("hex");
-
-    if (fs.existsSync(hashFile)) {
-      const savedHash = fs.readFileSync(hashFile, "utf8").trim();
-      if (savedHash !== currentHash) {
-        log("Source or build flags changed, rebuild needed");
-        return false;
-      }
-    } else {
-      fs.writeFileSync(hashFile, currentHash);
-    }
+    return !isBinaryStale(sourcePath, hashPath, getFlags);
   } catch (err) {
     log(`Hash check failed: ${err.message}, forcing rebuild`);
     return false;
   }
-
-  return true;
 }
 
 async function tryDownload() {
@@ -98,6 +120,11 @@ async function tryDownload() {
 
   if (result.status === 0 && fs.existsSync(outputBinary)) {
     log("Successfully downloaded prebuilt binary");
+    try {
+      fs.writeFileSync(hashFile, DOWNLOADED_MARKER);
+    } catch (err) {
+      log(`Warning: Could not save download marker: ${err.message}`);
+    }
     return true;
   }
 
@@ -167,13 +194,7 @@ function tryCompile() {
   }
 
   try {
-    const sourceContent = fs.readFileSync(cSource, "utf8");
-    const flagStr = pkgFlags.join(" ");
-    const hash = crypto
-      .createHash("sha256")
-      .update(sourceContent + flagStr)
-      .digest("hex");
-    fs.writeFileSync(hashFile, hash);
+    fs.writeFileSync(hashFile, computeSourceHash(cSource, pkgFlags));
   } catch (err) {
     log(`Warning: Could not save source hash: ${err.message}`);
   }
@@ -190,13 +211,15 @@ async function main() {
     return;
   }
 
-  const downloaded = await tryDownload();
-  if (downloaded) {
+  // The prebuilt release lags this checkout's source; compile whenever the
+  // toolchain is present so local fixes actually ship.
+  const compiled = tryCompile();
+  if (compiled) {
     return;
   }
 
-  const compiled = tryCompile();
-  if (compiled) {
+  const downloaded = await tryDownload();
+  if (downloaded) {
     return;
   }
 
@@ -207,6 +230,13 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error("[linux-text-monitor] Unexpected error:", error);
-});
+if (require.main === module) {
+  if (!isLinux) {
+    process.exit(0);
+  }
+  main().catch((error) => {
+    console.error("[linux-text-monitor] Unexpected error:", error);
+  });
+}
+
+module.exports = { DOWNLOADED_MARKER, getPkgConfigFlags, isBinaryUpToDate };

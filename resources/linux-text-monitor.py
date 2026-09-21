@@ -107,16 +107,16 @@ def main():
                 states.contains(Atspi.StateType.EDITABLE)
                 and states.contains(Atspi.StateType.ENABLED)
                 and states.contains(Atspi.StateType.FOCUSABLE)
-                and not states.contains(Atspi.StateType.PROTECTED)
             )
         except Exception:
             editable = False
         # A shell prompt must never read as a writable caret: pasted newlines
         # execute. VTE and Qt terminals expose the TERMINAL role; the caller
-        # separately refuses terminals by executable name.
+        # separately refuses terminals by executable name. AT-SPI has no
+        # "protected" state; password fields are told apart by role.
         if editable:
             try:
-                if focused.get_role() == Atspi.Role.TERMINAL:
+                if focused.get_role() in (Atspi.Role.TERMINAL, Atspi.Role.PASSWORD_TEXT):
                     editable = False
             except Exception:
                 pass
@@ -137,6 +137,15 @@ def main():
                 pass
         print("EDITABLE" if editable else "NOT_EDITABLE", flush=True)
         sys.exit(0)
+
+    # Monitor mode has no probe_editable gate, so it would otherwise read and
+    # emit a password field's value; refuse it the same way the probe branch does.
+    try:
+        if focused.get_role() == Atspi.Role.PASSWORD_TEXT:
+            print("NO_VALUE", flush=True)
+            sys.exit(0)
+    except Exception:
+        pass
 
     # Check if the element supports the Text interface
     try:
