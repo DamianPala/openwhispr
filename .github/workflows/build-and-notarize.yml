@@ -9,12 +9,6 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
   pull_request:
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Publish the installers as a GitHub prerelease under this tag (e.g. v1.10.2-soniox.1). Empty: artifacts only."
-        required: false
-        default: ""
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -450,34 +444,3 @@ jobs:
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
           rm -f $RUNNER_TEMP/build_certificate.p12
           rm -f $RUNNER_TEMP/api_key.p8
-
-  # Installers only, published from the artifacts the jobs above already built.
-  # Kept separate from release.yml, which needs the upstream signing secrets and
-  # publishes straight to OpenWhispr/openwhispr.
-  release:
-    needs: [build-linux, build-windows, build-macos]
-    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Collect installers
-        run: |
-          mkdir release
-          cp artifacts/linux-build/*.AppImage artifacts/linux-build/*.deb release/
-          cp artifacts/windows-build/*Setup*.exe release/
-          cp artifacts/macos-arm64-build/*.dmg artifacts/macos-x64-build/*.dmg release/
-          ls -la release
-          test "$(ls release | wc -l)" -eq 5 || { echo "Expected 5 installers"; exit 1; }
-
-      - name: Create prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: bash scripts/ci/publish-prerelease.sh

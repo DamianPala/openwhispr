@@ -1,0 +1,87 @@
+name: Fork Prerelease
+
+# Publishes a past "Build and Notarize" run's installers as a GitHub
+# prerelease under DamianPala/openwhispr. Kept as its own workflow instead of
+# a `release_tag` input on build-and-notarize.yml so that file stays a
+# two-flag diff from upstream (the HAS_*_SIGNING fallbacks) and this fork's
+# release job never has to merge there.
+#
+# Two dispatches, not one: `gh workflow run build-and-notarize.yml --ref
+# daily` builds the artifacts, then `gh workflow run fork-prerelease.yml --ref
+# daily -f release_tag=v1.10.2-soniox.N -f run_id=<that run's id>` publishes
+# them (`--ref daily` on both: the fork's default branch is upstream's `main`,
+# which has neither this file nor the fork's settings). The
+# run_id lets one failed upload be retried against the same build without
+# rebuilding every installer; artifacts only live 7 days
+# (build-and-notarize.yml's own retention-days), so a retry only works inside
+# that window.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to publish, e.g. v1.10.2-soniox.3"
+        required: true
+        type: string
+      run_id:
+        description: "A successful 'Build and Notarize' run id on this repo to publish from"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Resolve the build run
+        run: |
+          run_json="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha,conclusion,workflowName,headBranch)"
+          conclusion="$(jq -r '.conclusion' <<<"$run_json")"
+          workflow_name="$(jq -r '.workflowName' <<<"$run_json")"
+          head_sha="$(jq -r '.headSha' <<<"$run_json")"
+          head_branch="$(jq -r '.headBranch' <<<"$run_json")"
+
+          if [[ "$workflow_name" != "Build and Notarize" ]]; then
+            echo "run $RUN_ID is a '$workflow_name' run, not 'Build and Notarize'" >&2
+            exit 1
+          fi
+          if [[ "$conclusion" != "success" ]]; then
+            echo "run $RUN_ID did not succeed (conclusion: $conclusion)" >&2
+            exit 1
+          fi
+
+          echo "Publishing $RELEASE_TAG from $head_branch@$head_sha (run $RUN_ID)"
+          echo "BUILD_SHA=$head_sha" >>"$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          # docs/release-notes-soniox.md and the publish script come from the
+          # built commit, not whatever this dispatch's default ref currently
+          # points at.
+          ref: ${{ env.BUILD_SHA }}
+
+      - name: Download the build's artifacts
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -D artifacts
+
+      - name: Collect installers
+        run: |
+          mkdir release
+          cp artifacts/linux-build/*.AppImage artifacts/linux-build/*.deb release/
+          cp artifacts/windows-build/*Setup*.exe release/
+          cp artifacts/macos-arm64-build/*.dmg artifacts/macos-x64-build/*.dmg release/
+          ls -la release
+          test "$(ls release | wc -l)" -eq 5 || { echo "Expected 5 installers"; exit 1; }
+
+      - name: Publish prerelease
+        # Passed on the command line, not through the step's `env:` block: the
+        # runner re-applies its own GITHUB_SHA (the dispatching commit) on top
+        # of that block, which would silently undo the override. This way
+        # --target and the notes' "Built from" line credit what was actually
+        # built.
+        run: GITHUB_SHA="$BUILD_SHA" bash scripts/ci/publish-prerelease.sh

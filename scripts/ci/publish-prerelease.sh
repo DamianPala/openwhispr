@@ -4,6 +4,11 @@
 # a time, so one failed upload (bit -soniox.2) can't leave a half-created
 # release that a rerun then fails to recreate. A rerun reuses the existing
 # (still-draft) release and retries per asset instead.
+#
+# GITHUB_SHA is the *build* commit, not necessarily the commit that dispatched
+# this script: fork-prerelease.yml resolves it from the build run's headSha
+# and passes it through explicitly, so a rerun still targets and credits the
+# artifacts' actual source.
 set -euo pipefail
 
 : "${RELEASE_TAG:?RELEASE_TAG is required, e.g. v1.10.2-soniox.3}"
