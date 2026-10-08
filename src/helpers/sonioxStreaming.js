@@ -30,13 +30,10 @@ const resolveRegion = (region) => (Object.hasOwn(SONIOX_REGION_HOSTS, region) ? 
 // the same guard resolveByokModel applies in transcriptionRoute.ts.
 const resolveModel = (model) => (model && model.startsWith("stt-rt-") ? model : DEFAULT_MODEL);
 
-function buildConfigMessage({ apiKey, model, language, extraLanguages, keyterms, sampleRate }) {
-  const config = {
-    api_key: apiKey,
-    model: resolveModel(model),
-    audio_format: "pcm_s16le",
-    sample_rate: sampleRate || 16000,
-    num_channels: 1,
+// What the recognizer is told about the speech, shared by the realtime config
+// and the async request so both transcribe the same dictation the same way.
+function buildHints({ language, extraLanguages, keyterms }) {
+  const hints = {
     // Main language first, then extras in the user's order — new Set() keeps
     // insertion order, so this also dedupes a base code repeated between them.
     language_hints: [
@@ -47,10 +44,39 @@ function buildConfigMessage({ apiKey, model, language, extraLanguages, keyterms,
   };
   const terms = (keyterms || []).filter(Boolean);
   if (terms.length) {
-    config.context = { terms };
+    hints.context = { terms };
   }
-  return config;
+  return hints;
 }
+
+function buildConfigMessage({ apiKey, model, language, extraLanguages, keyterms, sampleRate }) {
+  return {
+    api_key: apiKey,
+    model: resolveModel(model),
+    audio_format: "pcm_s16le",
+    sample_rate: sampleRate || 16000,
+    num_channels: 1,
+    ...buildHints({ language, extraLanguages, keyterms }),
+  };
+}
+
+// Error frames that only say "this stream cannot go on": 408 request timeout,
+// 413 the connection hit its duration cap, 500 internal error, 503 service
+// unavailable (https://soniox.com/docs/api-reference/errors). The audio was
+// fine and the same key works on the async API, so they are reported as a lost
+// connection, which the renderer can fail over; every other code (bad key,
+// no balance, bad model, rate limit) is one the user has to fix.
+const RECOVERABLE_ERROR_CODES = new Set([408, 413, 500, 503]);
+const RECOVERABLE_ERROR_TYPES = new Set([
+  "request_timeout",
+  "max_duration_reached",
+  "internal_error",
+  "service_unavailable",
+]);
+
+const isRecoverableErrorFrame = (frame) =>
+  RECOVERABLE_ERROR_CODES.has(Number(frame.error_code)) ||
+  RECOVERABLE_ERROR_TYPES.has(frame.error_type);
 
 // A handshake that ends without an open socket (error, close before open,
 // timeout) is tagged so the renderer can tell "the connection never came up"
@@ -387,10 +413,16 @@ class SonioxStreaming {
           code: res.error_code,
           message: res.error_message,
         });
+        const error = new Error(`Soniox error ${res.error_code}: ${res.error_message}`);
+        if (isRecoverableErrorFrame(res)) {
+          // Sets the flag too, so the close that follows is not a second report.
+          this.notifyConnectionLost(error);
+          return;
+        }
         // Soniox closes the socket right after an error frame; that close is
         // this same failure, not a second lost connection.
         this.connectionLossNotified = true;
-        this.onError?.(new Error(`Soniox error ${res.error_code}: ${res.error_message}`));
+        this.onError?.(error);
         return;
       }
 
@@ -686,5 +718,8 @@ class SonioxStreaming {
 module.exports = SonioxStreaming;
 module.exports.removeFillers = removeFillers;
 module.exports.buildConfigMessage = buildConfigMessage;
+module.exports.buildHints = buildHints;
+module.exports.resolveRegion = resolveRegion;
+module.exports.isRecoverableErrorFrame = isRecoverableErrorFrame;
 module.exports.DEFAULT_MODEL = DEFAULT_MODEL;
 module.exports.SONIOX_REGIONS = SONIOX_REGIONS;

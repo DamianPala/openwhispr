@@ -953,6 +953,23 @@
         "audioDropped": {
           "title": "听写可能不完整",
           "description": "连接建立耗时过长，本次听写的一部分已被丢弃。"
+        },
+        "failover": {
+          "failed": {
+            "description": "无法连接到转录服务。请继续说话：停止后会转录整段听写。"
+          },
+          "lost": {
+            "description": "与转录服务的连接已断开。请继续说话：停止后会转录整段听写。"
+          },
+          "audioDropped": {
+            "description": "连接建立耗时过长，实时文字缺少一部分。停止后会转录整段听写。"
+          },
+          "transcriptionFailed": {
+            "description": "连接出现问题后，听写未能转录。录音已保存在历史记录中，可从那里重新转录。"
+          },
+          "streamedTextPasted": {
+            "description": "完整转录失败，因此已粘贴说话时识别到的文字。内容可能不完整。完整录音保存在历史记录中。"
+          }
         }
       },
       "partialTranscription": {

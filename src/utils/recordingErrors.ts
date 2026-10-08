@@ -4,6 +4,7 @@ import {
   STREAMING_AUDIO_DROPPED,
   STREAMING_CONNECTION_FAILED,
   STREAMING_CONNECTION_LOST,
+  STREAMING_FAILOVER_STREAMED_TEXT,
 } from "../helpers/streamingConnectionErrors.js";
 
 type RecordingError = {
@@ -31,7 +32,7 @@ export function getRecordingErrorTitle(error: RecordingError, t: TFunction): str
   if (error.code === STREAMING_CONNECTION_LOST) {
     return t("hooks.audioRecording.streamingConnection.lost.title");
   }
-  if (error.code === STREAMING_AUDIO_DROPPED) {
+  if (error.code === STREAMING_AUDIO_DROPPED || error.code === STREAMING_FAILOVER_STREAMED_TEXT) {
     return t("hooks.audioRecording.streamingConnection.audioDropped.title");
   }
   if (error.code === "NETWORK_ERROR") return t(error.title);

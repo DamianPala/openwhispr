@@ -953,6 +953,23 @@
         "audioDropped": {
           "title": "Dettatura forse incompleta",
           "description": "La connessione ha impiegato troppo tempo ad aprirsi, quindi una parte di questa dettatura è andata persa."
+        },
+        "failover": {
+          "failed": {
+            "description": "Impossibile connettersi al servizio di trascrizione. Continua a parlare: l'intera dettatura verrà trascritta quando avrai finito."
+          },
+          "lost": {
+            "description": "La connessione al servizio di trascrizione si è interrotta. Continua a parlare: l'intera dettatura verrà trascritta quando avrai finito."
+          },
+          "audioDropped": {
+            "description": "La connessione ha impiegato troppo tempo ad aprirsi, quindi manca una parte del testo in tempo reale. L'intera dettatura verrà trascritta quando avrai finito."
+          },
+          "transcriptionFailed": {
+            "description": "Non è stato possibile trascrivere la dettatura dopo il problema di connessione. La registrazione resta nella cronologia, dove puoi ritrascriverla."
+          },
+          "streamedTextPasted": {
+            "description": "La trascrizione completa non è riuscita, quindi è stato incollato il testo captato mentre parlavi. Potrebbe essere incompleto. La registrazione completa è nella cronologia."
+          }
         }
       },
       "partialTranscription": {

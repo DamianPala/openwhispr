@@ -953,6 +953,23 @@
         "audioDropped": {
           "title": "Dictation may be incomplete",
           "description": "The connection took too long to open, so part of this dictation was dropped."
+        },
+        "failover": {
+          "failed": {
+            "description": "Couldn't connect to the transcription service. Keep talking: the whole dictation will be transcribed after you stop."
+          },
+          "lost": {
+            "description": "The connection to the transcription service dropped. Keep talking: the whole dictation will be transcribed after you stop."
+          },
+          "audioDropped": {
+            "description": "The connection took too long to open, so part of the live text is missing. The whole dictation will be transcribed after you stop."
+          },
+          "transcriptionFailed": {
+            "description": "The dictation couldn't be transcribed after the connection problem. The recording is kept in History, where you can re-transcribe it."
+          },
+          "streamedTextPasted": {
+            "description": "The full transcription failed, so the text heard while you were talking was pasted. It may be incomplete. The whole recording is in History."
+          }
         }
       },
       "partialTranscription": {

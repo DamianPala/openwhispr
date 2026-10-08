@@ -29,9 +29,11 @@ import { MicStreamHold } from "./micStreamHold";
 import { PcmTap } from "./pcmTap";
 import { createCaptureReadyGate } from "./captureReadyGate";
 import {
+  ASYNC_INVALID_AUDIO,
   STREAMING_AUDIO_DROPPED,
   STREAMING_CONNECTION_FAILED,
   STREAMING_CONNECTION_LOST,
+  STREAMING_FAILOVER_STREAMED_TEXT,
   STREAMING_SESSION_ERROR,
 } from "./streamingConnectionErrors";
 import { ActiveMicRecoveryController } from "./activeMicRecovery";
@@ -389,6 +391,37 @@ const STREAMING_FINAL_CEILING_MS = 2000;
 // audio context (port never answers) reaches it.
 const STREAMING_FLUSH_CEILING_MS = 120;
 
+// Why a Soniox dictation is transcribed again from its whole recording through
+// Soniox's file API once it stops. Dropped opening audio leaves the socket
+// usable, so only the other two end the live stream.
+const SONIOX_FAILOVER = {
+  connectionFailed: "stream_connection_failed",
+  connectionLost: "stream_connection_lost",
+  audioDropped: "stream_audio_dropped",
+};
+const SONIOX_FAILOVER_NOTICES = {
+  [SONIOX_FAILOVER.connectionFailed]: {
+    code: STREAMING_CONNECTION_FAILED,
+    messageKey: "hooks.audioRecording.streamingConnection.failover.failed.description",
+  },
+  [SONIOX_FAILOVER.connectionLost]: {
+    code: STREAMING_CONNECTION_LOST,
+    messageKey: "hooks.audioRecording.streamingConnection.failover.lost.description",
+  },
+  [SONIOX_FAILOVER.audioDropped]: {
+    code: STREAMING_AUDIO_DROPPED,
+    messageKey: "hooks.audioRecording.streamingConnection.failover.audioDropped.description",
+  },
+};
+const SONIOX_FAILOVER_FAILED_KEY =
+  "hooks.audioRecording.streamingConnection.failover.transcriptionFailed.description";
+// The full transcription failed, so the stream's own (possibly incomplete) text
+// is pasted. The failover cue already sounded at the trigger.
+const SONIOX_STREAMED_TEXT_NOTICE = {
+  code: STREAMING_FAILOVER_STREAMED_TEXT,
+  messageKey: "hooks.audioRecording.streamingConnection.failover.streamedTextPasted.description",
+};
+
 // Both realtime providers share the dictation realtime IPC surface and differ
 // only in the token-provider id. Forcing `provider` here (even though
 // buildStreamingSessionOptions already stamps it) is pinned by
@@ -699,6 +732,7 @@ class AudioManager {
     this.sttConfigFetchedAt = null;
     this.streamingFallbackReason = null;
     this._streamingFailoverReason = null;
+    this._streamingFailoverNotified = false;
     this._streamingSpeechGateState = null;
     this.warmupFailureStreak = 0;
     this.lastAudioBlob = null;
@@ -3616,6 +3650,71 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     };
   }
 
+  // Batch target of a Soniox dictation whose stream failed: the recording goes
+  // through Soniox's file API (same key, region, language hints and dictionary
+  // as the stream), then through the usual cleanup/agent/translation pipeline.
+  // Failures keep their classified fields but read as "kept in History".
+  async processWithSonioxAsync(audioBlob, metadata = {}, wasCancelled = neverCancelled) {
+    const transcribeAsync = window.electronAPI?.sonioxAsyncTranscribe;
+    if (!transcribeAsync) {
+      throw new Error("Soniox async transcription is unavailable in this window");
+    }
+    const settings = getSettings();
+    const options = buildStreamingSessionOptions({
+      providerName: "soniox",
+      settings,
+      language: this.getEffectiveSttLanguage(settings),
+      keyterms: this.getKeyterms(),
+    });
+    const durationMs = metadata.durationSeconds
+      ? Math.round(metadata.durationSeconds * 1000)
+      : undefined;
+    const transcribe = async (blob) => {
+      const result = await transcribeAsync({
+        audioBuffer: await blob.arrayBuffer(),
+        mimeType: blob.type || "audio/webm",
+        durationMs,
+        language: options.language,
+        extraLanguages: options.extraLanguages,
+        region: options.region,
+        keyterms: options.keyterms,
+        removeFillers: options.removeFillers,
+      });
+      if (result?.error) throw errorFromIpcResult(result);
+      return result;
+    };
+
+    const start = performance.now();
+    let result;
+    try {
+      try {
+        result = await transcribe(audioBlob);
+      } catch (error) {
+        if (error.code !== ASYNC_INVALID_AUDIO || audioBlob.type?.includes("wav")) throw error;
+        logger.warn(
+          "Soniox refused the recording's container, retrying as WAV",
+          { type: audioBlob.type, size: audioBlob.size },
+          "transcription"
+        );
+        result = await transcribe(await convertToWav(audioBlob));
+      }
+    } catch (error) {
+      if (error.name !== "AbortError") error.messageKey = SONIOX_FAILOVER_FAILED_KEY;
+      throw error;
+    }
+    const timings = { transcriptionProcessingDurationMs: Math.round(performance.now() - start) };
+
+    const rawText = result.text || "";
+    if (!rawText.trim()) {
+      throw Object.assign(new Error("No speech detected in audio"), { code: "NO_SPEECH_DETECTED" });
+    }
+    const reasoningStart = performance.now();
+    const text = await this.processTranscription(rawText, "soniox-async", wasCancelled);
+    timings.reasoningProcessingDurationMs = Math.round(performance.now() - reasoningStart);
+    const source = (await this.isReasoningAvailable()) ? "soniox-async-reasoned" : "soniox-async";
+    return { success: true, text, rawText, source, timings };
+  }
+
   getCustomDictionaryArray() {
     return getSettings().customDictionary;
   }
@@ -4568,6 +4667,41 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     }
   }
 
+  // A failed-over dictation stops feeding its stream, except after dropped
+  // opening audio: that socket works, so the live text keeps coming.
+  _streamIsLive() {
+    const reason = this._streamingFailoverReason;
+    return !reason || reason === SONIOX_FAILOVER.audioDropped;
+  }
+
+  // The socket never opened or died: no final can arrive for stop to wait on.
+  _streamIsDead() {
+    const reason = this._streamingFailoverReason;
+    return reason === SONIOX_FAILOVER.connectionFailed || reason === SONIOX_FAILOVER.connectionLost;
+  }
+
+  // Marks a Soniox dictation for a full transcription through the file API after
+  // stop. The first trigger tells the user (and sounds the error cue, in the
+  // hook's warning handler); a stream that dies after dropped audio replaces
+  // that reason, since it ends the live text too. A trigger that lands once the
+  // user has stopped stays silent: "keep talking" would be wrong and the
+  // transcription is already on its way.
+  _failOverToAsync(reason, { stopping = this.isProcessing } = {}) {
+    const current = this._streamingFailoverReason;
+    if (!current || current === SONIOX_FAILOVER.audioDropped) {
+      this._streamingFailoverReason = reason;
+    }
+    logger.info(
+      "Soniox stream failed, transcribing the recording after stop",
+      { reason, stopping },
+      "streaming"
+    );
+    if (this._streamingFailoverNotified) return;
+    this._streamingFailoverNotified = true;
+    if (stopping) return;
+    this.onStreamWarning?.(SONIOX_FAILOVER_NOTICES[reason]);
+  }
+
   async finishStreamingFallbackSegment() {
     const recorder = this.streamingFallbackRecorder;
     if (!recorder) return null;
@@ -4714,6 +4848,8 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     let usedPreparedCapture = false;
     let sessionId = null;
     let startWasCancelled = () => false;
+    // Soniox only, and only with a fallback recorder holding the whole capture.
+    let failsOverToAsync = false;
     this._startInProgress = true;
     try {
       if (!this.isRecordingAllowedByPolicy()) {
@@ -4735,6 +4871,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       this._streamingSessionGeneration = sessionId;
       this.streamingFallbackReason = null;
       this._streamingFailoverReason = null;
+      this._streamingFailoverNotified = false;
       this._streamingSpeechGateState = createLocalSpeechGateState();
       this._activeStreamingSessionId = sessionId;
       const ownsSession = () => this._activeStreamingSessionId === sessionId;
@@ -4810,6 +4947,8 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           providerName: this.getStreamingProviderName(),
           cloudTranscriptionMode: getSettings().cloudTranscriptionMode,
         });
+      failsOverToAsync =
+        Boolean(this.streamingFallbackRecorder) && this.getStreamingProviderName() === "soniox";
 
       this.streamingProcessor.port.onmessage = (event) => {
         // The worklet posts its remaining PCM followed by a "flushed" sentinel
@@ -4827,7 +4966,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         // Measured from the first chunk: a recording that fails over later
         // still has its opening words in the gate.
         recordPcm16SpeechWindow(this._streamingSpeechGateState, event.data);
-        if (!this._streamingFailoverReason) provider.send(event.data);
+        if (this._streamIsLive()) provider.send(event.data);
       };
 
       this.isStreaming = true;
@@ -4907,6 +5046,15 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           { kind: issue.kind, error: issue.message },
           "streaming"
         );
+        if (failsOverToAsync) {
+          // The recording keeps going and the whole of it is transcribed after stop.
+          this._failOverToAsync(
+            issue.kind === "audio_dropped"
+              ? SONIOX_FAILOVER.audioDropped
+              : SONIOX_FAILOVER.connectionLost
+          );
+          return;
+        }
         if (issue.kind === "audio_dropped") {
           // The socket may still come up, so the recording keeps going.
           this.onStreamWarning?.({
@@ -5050,6 +5198,15 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
       if (startWasCancelled()) return false;
 
+      // The socket never opened. The fallback recorder has held the capture
+      // since the mic opened, so keep recording (the user may keep talking) and
+      // transcribe all of it after stop.
+      if (failsOverToAsync && error.code === STREAMING_CONNECTION_FAILED && this.isStreaming) {
+        this._failOverToAsync(SONIOX_FAILOVER.connectionFailed, { stopping: stopRequested });
+        if (stopRequested) return this.stopStreamingRecording();
+        return true;
+      }
+
       if (isStaleDeviceError(error) && !forceDefaultMic && !stopRequested) {
         // Pinned mic is gone (Chromium rotates IDs / device unplugged). Retry once on the default mic. See #900.
         logger.warn(
@@ -5190,6 +5347,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this._streamingCancellationGeneration += 1;
     ReasoningService.cancelAllRequests();
     window.electronAPI?.cancelCloudTranscription?.();
+    window.electronAPI?.cancelSonioxAsync?.();
     this._activeTranscriptionAbortController?.abort();
     this._activeTranscriptionAbortController = null;
     this.pendingSelectionEdit = null;
@@ -5439,7 +5597,9 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       }
     } else if (provider.awaitsFinalTranscript) {
       provider.finalize?.();
-      await this.awaitStreamingTextSettled(provider.finalCeilingMs);
+      // A stream that never opened or died sends no final, so waiting out the
+      // ceiling would only delay the upload of the whole recording.
+      if (!this._streamIsDead()) await this.awaitStreamingTextSettled(provider.finalCeilingMs);
     } else {
       provider.finalize?.();
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -5469,6 +5629,16 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         "streaming"
       );
     }
+
+    // Streamed text with a gap (or none) is replaced by a transcription of the
+    // whole recording, never stitched to it. It is kept aside, though: if that
+    // transcription fails, it is all the user has on screen.
+    const sonioxFailover =
+      Boolean(this._streamingFailoverReason) &&
+      this.getStreamingProviderName() === "soniox" &&
+      fallbackBlob?.size > 0;
+    const streamedText = sonioxFailover ? finalText.trim() : "";
+    if (sonioxFailover) finalText = "";
 
     this.cleanupStreamingListeners(sessionId);
     if (wasCancelled()) return true;
@@ -5754,6 +5924,27 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         });
       }
     };
+    // The full transcription of a failed-over Soniox dictation is out of reach
+    // (it failed, or the speech gate skipped it): paste what the stream heard,
+    // warn that it may be incomplete, and leave the whole recording in History.
+    const adoptStreamedText = async () => {
+      let text = streamedText;
+      try {
+        text = await this.processTranscription(streamedText, "soniox-streaming", wasCancelled);
+      } catch (error) {
+        logger.warn("Processing the streamed text failed", { error: error.message }, "streaming");
+      }
+      if (wasCancelled() || !text) return;
+      finalText = text;
+      usedBatchFallback = true;
+      batchFallbackResult = { source: "soniox-streaming", rawText: streamedText };
+      logger.info("Pasting the streamed text of a failed-over dictation", {}, "streaming");
+      this.onStreamWarning?.(SONIOX_STREAMED_TEXT_NOTICE);
+    };
+    if (!finalText && failoverSilent && streamedText) {
+      await adoptStreamedText();
+      if (wasCancelled()) return true;
+    }
     if (
       !finalText &&
       (failoverReason ? !failoverSilent : !finalAcknowledged && durationSeconds > 2) &&
@@ -5775,6 +5966,8 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         );
         try {
           // Cloud records usage server-side via /api/transcribe; BYOK has no metering.
+          // Soniox is BYOK-only: a failed-over Soniox dictation goes to its own file
+          // API, never to the OpenAI-compatible route.
           const batchResult =
             target === "cloud"
               ? await this.processWithOpenWhisprCloud(
@@ -5792,7 +5985,9 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
                   },
                   wasCancelled
                 )
-              : await this.processWithOpenAIAPI(fallbackBlob, { durationSeconds }, wasCancelled);
+              : sonioxFailover
+                ? await this.processWithSonioxAsync(fallbackBlob, { durationSeconds }, wasCancelled)
+                : await this.processWithOpenAIAPI(fallbackBlob, { durationSeconds }, wasCancelled);
           if (wasCancelled()) return true;
           if (batchResult?.text) {
             finalText = batchResult.text;
@@ -5805,7 +6000,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           // The cancelled upload's rejection is the expected outcome.
           if (wasCancelled()) return true;
           logger.error("Batch fallback failed", { error: fallbackErr.message }, "streaming");
-          failBatchFallback(fallbackErr);
+          if (streamedText && fallbackErr.code !== "NO_SPEECH_DETECTED") {
+            await adoptStreamedText();
+            if (wasCancelled()) return true;
+          }
+          if (!finalText) failBatchFallback(fallbackErr);
         }
       }
     }

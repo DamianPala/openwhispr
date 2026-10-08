@@ -13,6 +13,14 @@ export const STREAMING_AUDIO_DROPPED = "STREAMING_AUDIO_DROPPED";
 // session. Sounds the cue only: the toast keeps the service's own wording.
 export const STREAMING_SESSION_ERROR = "STREAMING_SESSION_ERROR";
 
+// Soniox's file API refused the recording's container or codec. Not a
+// connection error (no cue): the renderer retries once with a WAV copy.
+export const ASYNC_INVALID_AUDIO = "PROVIDER_INVALID_AUDIO";
+
+// The full transcription of a failed-over dictation failed and the streamed
+// text was pasted instead. A notice, not a connection error (no cue of its own).
+export const STREAMING_FAILOVER_STREAMED_TEXT = "STREAMING_FAILOVER_STREAMED_TEXT";
+
 const CONNECTION_ERROR_CODES = new Set([
   STREAMING_CONNECTION_FAILED,
   STREAMING_CONNECTION_LOST,

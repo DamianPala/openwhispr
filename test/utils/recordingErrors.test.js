@@ -59,3 +59,14 @@ test("each streaming connection failure reads as what happened, not as the raw s
     );
   }
 });
+
+test("pasted streamed text after a failed full transcription reads as a possibly incomplete dictation", async () => {
+  const { getRecordingErrorTitle, getRecordingErrorDescription } = await load();
+  const key = "hooks.audioRecording.streamingConnection.failover.streamedTextPasted.description";
+  const notice = { code: "STREAMING_FAILOVER_STREAMED_TEXT", messageKey: key };
+  assert.equal(
+    getRecordingErrorTitle(notice, t),
+    "hooks.audioRecording.streamingConnection.audioDropped.title"
+  );
+  assert.equal(getRecordingErrorDescription(notice, t), key);
+});

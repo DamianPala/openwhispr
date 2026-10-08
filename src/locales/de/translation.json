@@ -953,6 +953,23 @@
         "audioDropped": {
           "title": "Diktat möglicherweise unvollständig",
           "description": "Der Verbindungsaufbau hat zu lange gedauert, deshalb wurde ein Teil dieses Diktats verworfen."
+        },
+        "failover": {
+          "failed": {
+            "description": "Die Verbindung zum Transkriptionsdienst konnte nicht hergestellt werden. Sprich weiter: Das ganze Diktat wird transkribiert, sobald du aufhörst."
+          },
+          "lost": {
+            "description": "Die Verbindung zum Transkriptionsdienst ist abgebrochen. Sprich weiter: Das ganze Diktat wird transkribiert, sobald du aufhörst."
+          },
+          "audioDropped": {
+            "description": "Der Verbindungsaufbau hat zu lange gedauert, deshalb fehlt ein Teil des Live-Texts. Das ganze Diktat wird transkribiert, sobald du aufhörst."
+          },
+          "transcriptionFailed": {
+            "description": "Das Diktat konnte nach dem Verbindungsproblem nicht transkribiert werden. Die Aufnahme bleibt im Verlauf gespeichert, dort kannst du sie erneut transkribieren."
+          },
+          "streamedTextPasted": {
+            "description": "Die vollständige Transkription ist fehlgeschlagen, deshalb wurde der Text eingefügt, der beim Sprechen erkannt wurde. Er ist möglicherweise unvollständig. Die ganze Aufnahme ist im Verlauf."
+          }
         }
       },
       "partialTranscription": {

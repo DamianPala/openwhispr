@@ -953,6 +953,23 @@
         "audioDropped": {
           "title": "Dictée peut-être incomplète",
           "description": "La connexion a mis trop de temps à s’ouvrir, une partie de cette dictée a donc été perdue."
+        },
+        "failover": {
+          "failed": {
+            "description": "Impossible de se connecter au service de transcription. Continuez à parler : toute la dictée sera transcrite quand vous aurez terminé."
+          },
+          "lost": {
+            "description": "La connexion au service de transcription a été coupée. Continuez à parler : toute la dictée sera transcrite quand vous aurez terminé."
+          },
+          "audioDropped": {
+            "description": "La connexion a mis trop de temps à s’ouvrir, il manque donc une partie du texte en direct. Toute la dictée sera transcrite quand vous aurez terminé."
+          },
+          "transcriptionFailed": {
+            "description": "La dictée n’a pas pu être transcrite après le problème de connexion. L’enregistrement est conservé dans l’historique, où vous pouvez le retranscrire."
+          },
+          "streamedTextPasted": {
+            "description": "La transcription complète a échoué, le texte entendu pendant que vous parliez a donc été collé. Il peut être incomplet. L’enregistrement complet est dans l’historique."
+          }
         }
       },
       "partialTranscription": {

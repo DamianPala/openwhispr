@@ -109,6 +109,7 @@ const { i18nMain, changeLanguage } = require("./i18nMain");
 const DeepgramStreaming = require("./deepgramStreaming");
 const SonioxStreaming = require("./sonioxStreaming");
 const { DEFAULT_MODEL: SONIOX_DEFAULT_MODEL } = SonioxStreaming;
+const { transcribeRecording: transcribeSonioxRecording } = require("./sonioxAsync");
 const { GeminiLiveStreaming, GEMINI_LIVE_MODEL } = require("./geminiLiveStreaming");
 const CortiStreaming = require("./cortiStreaming");
 const OpenAIRealtimeStreaming = require("./openaiRealtimeStreaming");
@@ -11601,6 +11602,51 @@ class IPCHandlers {
         ? this.sonioxStreaming.getStatus()
         : { isConnected: false, sessionId: null }
     );
+
+    // The whole recording through Soniox's file API, for a dictation whose
+    // stream failed. One at a time: a newer request supersedes an older one.
+    let sonioxAsyncAbort = null;
+
+    ipcMain.handle(
+      "soniox-async-transcribe",
+      serializeIpcError(async (event, request = {}) => {
+        // A proxy override sends the stream through the user's own endpoint; the
+        // file API has no such route, so the audio is not sent around it.
+        if (process.env.SONIOX_WS_URL) {
+          throw Object.assign(
+            new Error("Soniox async transcription is unavailable while SONIOX_WS_URL is set."),
+            { code: "SONIOX_ASYNC_UNAVAILABLE" }
+          );
+        }
+        const audio = Buffer.from(request.audioBuffer || []);
+        if (audio.length === 0) throw new Error("No audio to transcribe");
+
+        const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
+        sonioxAsyncAbort?.abort();
+        const controller = new AbortController();
+        sonioxAsyncAbort = controller;
+        try {
+          const result = await transcribeSonioxRecording({
+            apiKey,
+            region: request.region,
+            audio,
+            mimeType: typeof request.mimeType === "string" ? request.mimeType : "audio/webm",
+            durationMs: request.durationMs,
+            language: request.language,
+            extraLanguages: request.extraLanguages,
+            keyterms: request.keyterms,
+            removeFillers: request.removeFillers !== false,
+            signal: controller.signal,
+            fetchImpl: proxyFetch,
+          });
+          return { success: true, ...result };
+        } finally {
+          if (sonioxAsyncAbort === controller) sonioxAsyncAbort = null;
+        }
+      })
+    );
+
+    ipcMain.on("soniox-async-cancel", () => sonioxAsyncAbort?.abort());
 
     let geminiStreamingStartInProgress = false;
     let geminiSendDropCount = 0;

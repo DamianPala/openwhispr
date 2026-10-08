@@ -932,6 +932,23 @@
         "audioDropped": {
           "title": "O ditado pode estar incompleto",
           "description": "A conexão demorou demais para abrir, então parte deste ditado foi descartada."
+        },
+        "failover": {
+          "failed": {
+            "description": "Não foi possível conectar ao serviço de transcrição. Continue falando: o ditado inteiro será transcrito quando você parar."
+          },
+          "lost": {
+            "description": "A conexão com o serviço de transcrição caiu. Continue falando: o ditado inteiro será transcrito quando você parar."
+          },
+          "audioDropped": {
+            "description": "A conexão demorou demais para abrir, então falta parte do texto ao vivo. O ditado inteiro será transcrito quando você parar."
+          },
+          "transcriptionFailed": {
+            "description": "Não foi possível transcrever o ditado após o problema de conexão. A gravação foi mantida no histórico, onde você pode retranscrevê-la."
+          },
+          "streamedTextPasted": {
+            "description": "A transcrição completa falhou, então o texto captado enquanto você falava foi colado. Pode estar incompleto. A gravação inteira está no histórico."
+          }
         }
       },
       "partialTranscription": {

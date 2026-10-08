@@ -2961,6 +2961,34 @@ declare global {
       ) => () => void;
       onSonioxSessionEnd?: (callback: (data: { text?: string }) => void) => () => void;
       onSonioxFinalized?: (callback: () => void) => () => void;
+      // Whole recording through Soniox's file API, for a dictation whose stream failed.
+      // Failures resolve with the classified error fields, like the proxy providers.
+      sonioxAsyncTranscribe?: (request: {
+        audioBuffer: ArrayBuffer;
+        mimeType: string;
+        durationMs?: number;
+        language?: string;
+        extraLanguages?: string[];
+        region?: string;
+        keyterms?: string[];
+        removeFillers?: boolean;
+      }) => Promise<{
+        success?: boolean;
+        text?: string;
+        model?: string;
+        transcriptionId?: string;
+        audioDurationMs?: number | null;
+        timings?: { uploadMs?: number; processingMs?: number; totalMs?: number };
+        error?: string;
+        code?: string;
+        messageKey?: string;
+        messageParams?: Record<string, string | number>;
+        settingsTarget?: string;
+        technicalDetails?: Record<string, unknown>;
+        status?: number;
+        surface?: string;
+      }>;
+      cancelSonioxAsync?: () => void;
 
       // Gemini Live Streaming
       geminiStreamingWarmup?: (

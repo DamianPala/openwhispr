@@ -748,6 +748,63 @@ describe("message handling (loopback)", () => {
     });
   });
 
+  it("reports an error frame that only says the stream cannot go on as one lost connection", async () => {
+    // 408 request timeout, 413 duration cap, 500 internal error, 503 unavailable.
+    for (const frame of [
+      { error_code: 503, error_message: "Cannot continue request (code 1). Please restart" },
+      { error_code: 413, error_message: "maximum allowed duration" },
+      { error_code: 500, error_message: "internal" },
+      { error_code: 408, error_message: "timeout" },
+      { error_code: 400, error_type: "service_unavailable", error_message: "typed" },
+    ]) {
+      await withSonioxServer(async (url, connections) => {
+        const streaming = new SonioxStreaming();
+        streaming.buildWebSocketUrl = () => url;
+        const errors = [];
+        const lost = [];
+        streaming.onError = (err) => errors.push(err);
+        streaming.onConnectionLost = (err) => lost.push(err);
+        try {
+          await streaming.connect({ apiKey: "k", mode: "byok" });
+          connections[0].socket.send(JSON.stringify(frame));
+          await wait(20);
+          connections[0].socket.close();
+          await wait(30);
+
+          assert.deepEqual(errors, [], JSON.stringify(frame));
+          assert.equal(lost.length, 1, JSON.stringify(frame));
+          assert.match(lost[0].message, new RegExp(`Soniox error ${frame.error_code}`));
+        } finally {
+          streaming.cleanup();
+        }
+      });
+    }
+  });
+
+  it("keeps an error frame the user has to fix on the error path", async () => {
+    // Bad key, no balance, forbidden, bad model, rate limit.
+    for (const code of [401, 402, 403, 400, 429]) {
+      await withSonioxServer(async (url, connections) => {
+        const streaming = new SonioxStreaming();
+        streaming.buildWebSocketUrl = () => url;
+        const errors = [];
+        const lost = [];
+        streaming.onError = (err) => errors.push(err);
+        streaming.onConnectionLost = (err) => lost.push(err);
+        try {
+          await streaming.connect({ apiKey: "k", mode: "byok" });
+          connections[0].socket.send(JSON.stringify({ error_code: code, error_message: "x" }));
+          await wait(20);
+
+          assert.equal(errors.length, 1, String(code));
+          assert.deepEqual(lost, [], String(code));
+        } finally {
+          streaming.cleanup();
+        }
+      });
+    }
+  });
+
   it("joins BPE sub-word tokens without losing intentional spaces, dropping <fin>/<end> markers", () => {
     const streaming = new SonioxStreaming();
     const finalTexts = [];

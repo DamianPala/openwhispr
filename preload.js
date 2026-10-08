@@ -894,6 +894,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     (callback) => (_event, data) => callback(data)
   ),
   onSonioxFinalized: registerListener("soniox-finalized", (callback) => () => callback()),
+  sonioxAsyncTranscribe: (request) => ipcRenderer.invoke("soniox-async-transcribe", request),
+  cancelSonioxAsync: () => ipcRenderer.send("soniox-async-cancel"),
 
   // Gemini Live Streaming
   geminiStreamingWarmup: (options) => ipcRenderer.invoke("gemini-streaming-warmup", options),
