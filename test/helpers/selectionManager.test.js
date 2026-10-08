@@ -718,6 +718,219 @@ test("older AT-SPI timeouts cannot cool down a newer successful probe", async (t
   assert.deepEqual(await next, { kind: "atspi-pid", id: "42" });
 });
 
+// The persistent AT-SPI server (linuxAtspiServer.js) replaces the one-shot helper
+// processes when it can. Its answers must read exactly like the helper's stdout.
+function makeAtspiSpawn(stdout, spawnCalls) {
+  return (command, args) => {
+    spawnCalls.push({ command, args });
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    process.nextTick(() => {
+      if (stdout) child.stdout.emit("data", stdout);
+      child.emit("close", stdout ? 0 : 1);
+    });
+    return child;
+  };
+}
+
+function makeAtspiServerStub(reply) {
+  const calls = [];
+  return {
+    calls,
+    request: async (command, timeout) => {
+      calls.push({ command, timeout });
+      return reply(command);
+    },
+  };
+}
+
+function makeAtspiManager({ stdout = "", atspiServer, now = () => 1000 } = {}) {
+  const spawnCalls = [];
+  const Spawning = loadSelectionManager({ spawn: makeAtspiSpawn(stdout, spawnCalls) });
+  const manager = new Spawning({
+    clipboardManager: {
+      resolveLinuxFastPasteBinary: () => "/tmp/linux-fast-paste",
+      atspiServer,
+    },
+    platform: "linux",
+    now,
+  });
+  return { manager, spawnCalls };
+}
+
+const served = (stdout) => ({ success: true, timedOut: false, stdout, stderr: "" });
+
+for (const [name, stdout] of [
+  ["a pid", "TARGET ATSPI 42\n"],
+  ["no pid", "UNEXPECTED\n"],
+]) {
+  test(`an AT-SPI server target answer with ${name} resolves like the one-shot helper`, async () => {
+    const oneShot = makeAtspiManager({ stdout });
+    const server = makeAtspiServerStub(() => served(stdout));
+    const viaServer = makeAtspiManager({ atspiServer: server });
+
+    const expected = await oneShot.manager._getLinuxAtspiTarget();
+    assert.deepEqual(await viaServer.manager._getLinuxAtspiTarget(), expected);
+    assert.deepEqual(viaServer.spawnCalls, [], "a served answer must not spawn the helper");
+    assert.equal(server.calls.length, 1);
+    assert.equal(server.calls[0].command, "TARGET");
+    assert.ok(server.calls[0].timeout > 0);
+  });
+}
+
+for (const [name, stdout, expectedTarget, reply] of [
+  ["selected text", "ATSPI_SELECTED 42 aGVsbG8=\n", { kind: "atspi-pid", id: "42" }, null],
+  ["nothing selected", "ATSPI_NONE 42\n", { kind: "atspi-pid", id: "42" }, null],
+  ["another application", "ATSPI_NONE 7\n", { kind: "atspi-pid", id: "42" }, null],
+  ["no answer", "", { kind: "atspi-pid", id: "42" }, { ...served(""), success: false }],
+]) {
+  test(`an AT-SPI server selection answer (${name}) resolves like the one-shot helper`, async () => {
+    const oneShot = makeAtspiManager({ stdout });
+    const server = makeAtspiServerStub(() => reply ?? served(stdout));
+    const viaServer = makeAtspiManager({ atspiServer: server });
+
+    const expected = await oneShot.manager._readLinuxAtspiSelection(
+      "/tmp/linux-fast-paste",
+      expectedTarget
+    );
+    const actual = await viaServer.manager._readLinuxAtspiSelection(
+      "/tmp/linux-fast-paste",
+      expectedTarget
+    );
+    assert.deepEqual(actual, expected);
+    assert.deepEqual(viaServer.spawnCalls, []);
+    assert.deepEqual(
+      server.calls.map((call) => call.command),
+      ["SELECTION"]
+    );
+  });
+}
+
+test("a decoded server selection carries the text", async () => {
+  const server = makeAtspiServerStub(() => served("ATSPI_SELECTED 42 aGVsbG8=\n"));
+  const { manager } = makeAtspiManager({ atspiServer: server });
+  assert.deepEqual(await manager._readLinuxAtspiSelection("/tmp/linux-fast-paste", null), {
+    status: "selected",
+    text: "hello",
+    target: { kind: "atspi-pid", id: "42" },
+  });
+});
+
+test("without a server answer the one-shot helper runs with its own flag", async () => {
+  for (const atspiServer of [undefined, makeAtspiServerStub(() => null)]) {
+    const { manager, spawnCalls } = makeAtspiManager({
+      stdout: "TARGET ATSPI 42\n",
+      atspiServer,
+    });
+    assert.deepEqual(await manager._getLinuxAtspiTarget(), { kind: "atspi-pid", id: "42" });
+    assert.deepEqual(spawnCalls, [{ command: "/tmp/linux-fast-paste", args: ["--atspi-target"] }]);
+  }
+  const selectionServer = makeAtspiServerStub(() => null);
+  const { manager, spawnCalls } = makeAtspiManager({
+    stdout: "ATSPI_NONE 42\n",
+    atspiServer: selectionServer,
+  });
+  assert.deepEqual(await manager._readLinuxAtspiSelection("/tmp/linux-fast-paste", null), {
+    status: "none",
+    target: { kind: "atspi-pid", id: "42" },
+  });
+  assert.deepEqual(spawnCalls, [{ command: "/tmp/linux-fast-paste", args: ["--atspi-selection"] }]);
+});
+
+test("an AT-SPI server timeout opens the cooldown and sends nothing during it", async () => {
+  let now = 1000;
+  const server = makeAtspiServerStub(() => ({
+    success: false,
+    timedOut: true,
+    stdout: "",
+    stderr: "",
+  }));
+  const { manager, spawnCalls } = makeAtspiManager({ atspiServer: server, now: () => now });
+
+  assert.equal(await manager._getLinuxAtspiTarget(), null);
+  assert.equal(server.calls.length, 1);
+
+  assert.equal(await manager._getLinuxAtspiTarget(), null);
+  const cooled = await manager._readLinuxAtspiSelection("/tmp/linux-fast-paste", null);
+  assert.equal(cooled.code, "accessibility_unavailable");
+  assert.equal(server.calls.length, 1, "no request may reach the server during the cooldown");
+
+  now += 2000;
+  assert.equal(await manager._getLinuxAtspiTarget(), null);
+  assert.equal(server.calls.length, 2);
+  assert.deepEqual(spawnCalls, [], "a timed out request is not retried through the helper");
+});
+
+// The copy helper walks AT-SPI to tell a terminal from any other window. The server
+// has just answered that question, so the helper is told instead of asking again.
+function makeCopyHarness({ target, terminalArgs, canAccessUinput = false, terminalClasses = [] }) {
+  const spawnCalls = [];
+  const Spawning = loadSelectionManager({ spawn: makeAtspiSpawn("COPY_OK\n", spawnCalls) });
+  const asked = [];
+  const clipboardManager = {
+    runClipboardOperation: (operation) => operation(),
+    isLinuxTerminalWindowClass: (windowClass) => terminalClasses.includes(windowClass),
+    resolveLinuxFastPasteBinary: () => "/tmp/linux-fast-paste",
+    _awaitModifierRelease: async () => ({ state: "released", waitedMs: 0 }),
+    _canAccessUinput: () => canAccessUinput,
+  };
+  if (terminalArgs) {
+    clipboardManager._atspiTerminalArgs = async () => {
+      asked.push(true);
+      return terminalArgs;
+    };
+  }
+  const manager = new Spawning({ clipboardManager, textEditMonitor: {}, platform: "linux" });
+  manager._getLinuxTarget = async () => target;
+  manager._captureViaClipboard = async (sendCopy) => {
+    await sendCopy();
+    return { status: "none", target };
+  };
+  return { manager, spawnCalls, asked };
+}
+
+test("a copy through an X11 window passes along the server's terminal answer", async () => {
+  const target = { kind: "x11-window", id: "7", windowClass: "kate" };
+  const withAnswer = makeCopyHarness({ target, terminalArgs: ["--atspi-terminal", "1"] });
+  await withAnswer.manager._readLinuxSelection(null);
+  assert.deepEqual(withAnswer.spawnCalls[0].args, [
+    "--copy",
+    "--window",
+    "7",
+    "--atspi-terminal",
+    "1",
+  ]);
+
+  const withoutAnswer = makeCopyHarness({ target, terminalArgs: [] });
+  await withoutAnswer.manager._readLinuxSelection(null);
+  assert.deepEqual(withoutAnswer.spawnCalls[0].args, ["--copy", "--window", "7"]);
+
+  const oldClipboard = makeCopyHarness({ target });
+  await oldClipboard.manager._readLinuxSelection(null);
+  assert.deepEqual(oldClipboard.spawnCalls[0].args, ["--copy", "--window", "7"]);
+});
+
+test("a uinput copy passes along the server's terminal answer", async () => {
+  const kate = { kind: "kde-window", id: "7", windowClass: "kate" };
+  const plain = makeCopyHarness({
+    target: kate,
+    terminalArgs: ["--atspi-terminal", "0"],
+    canAccessUinput: true,
+  });
+  await plain.manager._readLinuxSelection(null);
+  assert.deepEqual(plain.spawnCalls[0].args, ["--copy", "--uinput", "--atspi-terminal", "0"]);
+
+  const hypr = makeCopyHarness({
+    target: { kind: "hyprland-window", id: "a", windowClass: "foot" },
+    terminalArgs: ["--atspi-terminal", "1"],
+    canAccessUinput: true,
+  });
+  await hypr.manager._readLinuxSelection(null);
+  assert.deepEqual(hypr.spawnCalls[0].args, ["--copy", "--uinput", "--atspi-terminal", "1"]);
+});
+
 // The Windows paste path restores the window captured at record start (#859).
 // getWinTarget hands the paste that HWND exactly as --detect-only printed
 // it ("TARGET %p", hex) so the binary's base-16 --restore-window parse round-trips.

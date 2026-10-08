@@ -86,7 +86,9 @@ function writeClipboardInRenderer(webContents, text) {
 }
 
 class ClipboardManager {
-  constructor() {
+  // `atspiServer` is the Linux app's persistent AT-SPI server (linuxAtspiServer.js).
+  constructor({ atspiServer = null } = {}) {
+    this.atspiServer = atspiServer;
     this.accessibilityCache = { value: null, expiresAt: 0 };
     this.commandAvailabilityCache = new Map();
     this.nircmdPath = null;
@@ -514,12 +516,25 @@ class ClipboardManager {
     }
   }
 
-  _runPortalPaste(fastPasteBinary, { shiftInsert = false, terminal = false, copy = false } = {}) {
+  // `--atspi-terminal 0|1` for a paste or copy chord, when the AT-SPI server could say
+  // whether the active window is a terminal. The helper otherwise walks the AT-SPI
+  // tree itself, and each such process leaves dead connections in the applications it
+  // walked. Asked right before the helper starts, as the helper asked it before.
+  async _atspiTerminalArgs() {
+    const terminal = await this.atspiServer?.queryTerminal();
+    return terminal ? ["--atspi-terminal", terminal] : [];
+  }
+
+  async _runPortalPaste(
+    fastPasteBinary,
+    { shiftInsert = false, terminal = false, copy = false } = {}
+  ) {
+    const modeArgs = shiftInsert ? ["--shift-insert"] : terminal ? ["--terminal"] : [];
+    if (modeArgs.length === 0) modeArgs.push(...(await this._atspiTerminalArgs()));
     return new Promise((resolve, reject) => {
       const args = ["--portal"];
       if (copy) args.push("--copy");
-      if (shiftInsert) args.push("--shift-insert");
-      else if (terminal) args.push("--terminal");
+      args.push(...modeArgs);
 
       const restoreToken = this._readPortalToken();
       if (restoreToken) {
@@ -1705,9 +1720,10 @@ class ClipboardManager {
     // windowactivate --sync and reliably reaches the target window.
     const skipFastPasteForKonsole = detectedIsKonsole && !isWayland;
 
-    const appendModeFlag = (args) => {
+    const appendModeFlag = async (args) => {
       if (useShiftInsert) args.push("--shift-insert");
       else if (isTerminalTarget) args.push("--terminal");
+      else args.push(...(await this._atspiTerminalArgs()));
     };
 
     // cosmic-comp has the virtual keyboard too, and wtype is the only way to give a
@@ -1897,7 +1913,7 @@ class ClipboardManager {
         if (xwaylandAvailable && !this.xtestTimedOut) {
           const xtestArgs = [];
           if (targetWindowId) xtestArgs.push("--window", targetWindowId);
-          appendModeFlag(xtestArgs);
+          await appendModeFlag(xtestArgs);
 
           try {
             await spawnFastPaste(xtestArgs, "XTest/XWayland fallback");
@@ -1927,7 +1943,7 @@ class ClipboardManager {
       } else {
         const xtestArgs = [];
         if (targetWindowId) xtestArgs.push("--window", targetWindowId);
-        appendModeFlag(xtestArgs);
+        await appendModeFlag(xtestArgs);
 
         try {
           await spawnFastPaste(xtestArgs, "XTest");

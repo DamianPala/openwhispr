@@ -290,6 +290,7 @@ const EnvironmentManager = require("./src/helpers/environment");
 const WindowManager = require("./src/helpers/windowManager");
 const DatabaseManager = require("./src/helpers/database");
 const ClipboardManager = require("./src/helpers/clipboard");
+const { createLinuxAtspiServer } = require("./src/helpers/linuxAtspiServer");
 const WhisperManager = require("./src/helpers/whisper");
 const ParakeetManager = require("./src/helpers/parakeet");
 const DiarizationManager = require("./src/helpers/diarization");
@@ -353,6 +354,7 @@ let windowsKeyManager = null;
 let linuxKeyManager = null;
 let textEditMonitor = null;
 let selectionManager = null;
+let atspiServer = null;
 let whisperCudaManager = null;
 let whisperVulkanManager = null;
 let googleCalendarManager = null;
@@ -497,7 +499,12 @@ function initializeCoreManagers() {
     binding: accountScopeBinding.read(),
   });
   if (bootAccountId) databaseManager.setActiveAccountId(bootAccountId);
-  clipboardManager = new ClipboardManager();
+  if (process.platform === "linux") {
+    atspiServer = createLinuxAtspiServer({
+      resolveBinary: () => clipboardManager.resolveLinuxFastPasteBinary(),
+    });
+  }
+  clipboardManager = new ClipboardManager({ atspiServer });
   const { createConnectorManager } = require("./src/helpers/connectors/connectorManager");
   const { createPendingActions } = require("./src/helpers/connectors/pendingActions");
   const { createActionLog } = require("./src/helpers/connectors/actionLog");
@@ -705,6 +712,8 @@ function registerSidecars() {
   sidecarRegistry.register("llama", () => modelManager.stopServer());
   const onnxWorkerClient = require("./src/helpers/onnxWorkerClient");
   sidecarRegistry.register("onnx", () => onnxWorkerClient.stop());
+  // Exits when its stdin closes, so a crashed app leaves no orphan and needs no PID file.
+  if (atspiServer) sidecarRegistry.register("atspi-server", () => atspiServer.stop());
 }
 
 // Phase 2: Non-critical setup after windows are visible

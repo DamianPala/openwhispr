@@ -493,9 +493,8 @@ class SelectionManager {
         if (target.kind === "x11-window") {
           // The binary classifies the window itself via --window and picks
           // Ctrl+C or Ctrl+Shift+C accordingly.
-          const result = await runSpawn(binary, ["--copy", "--window", target.id], {
-            timeout: COPY_TIMEOUT_MS,
-          });
+          const args = ["--copy", "--window", target.id, ...(await this._atspiTerminalArgs())];
+          const result = await runSpawn(binary, args, { timeout: COPY_TIMEOUT_MS });
           return { success: result.success, target };
         }
 
@@ -508,6 +507,7 @@ class SelectionManager {
         if (this.clipboardManager._canAccessUinput?.()) {
           const args = ["--copy", "--uinput"];
           if (isTerminal) args.push("--terminal");
+          else args.push(...(await this._atspiTerminalArgs()));
           const result = await runSpawn(binary, args, { timeout: COPY_TIMEOUT_MS });
           return { success: result.success, target };
         }
@@ -641,7 +641,9 @@ class SelectionManager {
     }
 
     const generation = ++this._atspiProbeGeneration;
-    const result = await runSpawn(binary, ["--atspi-selection"], { timeout: COPY_TIMEOUT_MS });
+    const result = await this._runAtspiQuery(binary, "SELECTION", "--atspi-selection", {
+      timeout: COPY_TIMEOUT_MS,
+    });
     if (result.timedOut && generation === this._atspiProbeGeneration) {
       this._atspiCooldownUntil = this.now() + ATSPI_COOLDOWN_MS;
       debugLogger.warn("AT-SPI selection probe timed out", { cooldownMs: ATSPI_COOLDOWN_MS });
@@ -729,7 +731,7 @@ class SelectionManager {
     const binary = this.clipboardManager.resolveLinuxFastPasteBinary();
     if (!binary) return null;
     const generation = ++this._atspiProbeGeneration;
-    const result = await runSpawn(binary, ["--atspi-target"], {
+    const result = await this._runAtspiQuery(binary, "TARGET", "--atspi-target", {
       timeout: ATSPI_TARGET_TIMEOUT_MS,
     });
     if (result.timedOut && generation === this._atspiProbeGeneration) {
@@ -738,6 +740,23 @@ class SelectionManager {
     }
     const match = result.stdout.match(/^TARGET\s+ATSPI\s+(\d+)$/m);
     return result.success && match ? { kind: "atspi-pid", id: match[1] } : null;
+  }
+
+  // Each one-shot helper process leaves dead D-Bus connections in every accessible
+  // application it walked, so the app's persistent AT-SPI server (linuxAtspiServer.js)
+  // answers when it can. Its answer has the shape and text the helper's stdout has.
+  // Without a server (older binary, repeated crashes, no spawn) the helper answers.
+  _runAtspiQuery(binary, command, flag, { timeout }) {
+    const oneShot = () => runSpawn(binary, [flag], { timeout });
+    const server = this.clipboardManager.atspiServer;
+    if (!server) return oneShot();
+    return server.request(command, timeout).then((served) => served ?? oneShot());
+  }
+
+  // `--atspi-terminal 0|1` for a copy chord, when the AT-SPI server could say whether
+  // the active window is a terminal; empty makes the helper walk AT-SPI itself.
+  async _atspiTerminalArgs() {
+    return (await this.clipboardManager._atspiTerminalArgs?.()) ?? [];
   }
 
   async _captureViaClipboard(sendCopy, expectedTarget) {
