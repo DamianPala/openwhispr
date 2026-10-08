@@ -208,10 +208,20 @@ class ClipboardManager {
       { tool: "xsel", args: ["--primary", "--input"], input: text, timeout: 200 },
     ];
     // wl-copy connects, offers the selection and forks a serving child before
-    // the parent exits; a compositor under load takes well over 100 ms for
-    // that handshake, and killing it mid-way leaves the selection unset.
-    const wlCopy = isWayland && { tool: "wl-copy", args: ["--primary", "--", text], timeout: 300 };
-    const writers = (isKde ? [...x11Writers, wlCopy] : [wlCopy, ...x11Writers]).filter(Boolean);
+    // the parent exits; on KDE that handshake also flips keyboard focus, so it
+    // is the last-resort fallback there and gets a longer budget (measured
+    // over 100 ms under load) instead of upstream's fast-path value.
+    let writers;
+    if (!isWayland) {
+      writers = x11Writers;
+    } else {
+      const wlCopy = {
+        tool: "wl-copy",
+        args: ["--primary", "--", text],
+        timeout: isKde ? 300 : 50,
+      };
+      writers = isKde ? [...x11Writers, wlCopy] : [wlCopy, ...x11Writers];
+    }
 
     const attempts = [];
     for (const writer of writers) {
@@ -299,12 +309,12 @@ class ClipboardManager {
     return this.isTerminalSignature(windowClass);
   }
 
-  // Selection capture (SelectionManager) seeds a sentinel and polls until a
-  // synthetic copy replaces it. On Wayland — KDE especially — the X11 and
-  // Wayland clipboards can be desynced, so write and read BOTH sides; a value
-  // appearing on either side counts.
+  // Selection capture (SelectionManager) polls both clipboard tools for a
+  // synthetic copy. KDE skips wl-copy/wl-paste — they steal keyboard focus
+  // per call (see _writePrimarySelection) — relying on KWin's Xwayland bridge.
   _writeClipboardTextAll(text) {
-    if (this._isWayland() && this.commandExists("wl-copy")) {
+    const { isKde } = getLinuxSessionInfo();
+    if (this._isWayland() && !isKde && this.commandExists("wl-copy")) {
       try {
         spawnSync("wl-copy", ["--", text], { timeout: 200, stdio: SELECTION_OWNER_STDIO });
       } catch {}
@@ -332,7 +342,8 @@ class ClipboardManager {
 
   _readClipboardTextAll() {
     const texts = [];
-    if (this._isWayland() && this.commandExists("wl-paste")) {
+    const { isKde } = getLinuxSessionInfo();
+    if (this._isWayland() && !isKde && this.commandExists("wl-paste")) {
       try {
         const result = spawnSync("wl-paste", ["--no-newline"], { timeout: 200 });
         if (result.status === 0) texts.push(result.stdout.toString());
@@ -654,7 +665,10 @@ class ClipboardManager {
       proc.stdout.on("data", (chunk) => {
         stdout += chunk;
       });
-      proc.on("error", () => resolve(null));
+      proc.on("error", () => {
+        clearTimeout(timer);
+        resolve(null);
+      });
       proc.on("close", (code) => {
         clearTimeout(timer);
         const cls = code === 0 ? stdout.trim().toLowerCase() : "";
@@ -1632,7 +1646,7 @@ class ClipboardManager {
     const preDetectTargetWindow = () => {
       if (!xdotoolSeesTarget) return null;
       try {
-        const result = spawnSync("xdotool", ["getactivewindow"]);
+        const result = spawnSync("xdotool", ["getactivewindow"], { timeout: 1000 });
         return result.status === 0 ? result.stdout.toString().trim() || null : null;
       } catch {
         return null;
@@ -1645,7 +1659,7 @@ class ClipboardManager {
         const args = windowId
           ? ["getwindowclassname", windowId]
           : ["getactivewindow", "getwindowclassname"];
-        const result = spawnSync("xdotool", args);
+        const result = spawnSync("xdotool", args, { timeout: 1000 });
         return result.status === 0 ? result.stdout.toString().toLowerCase().trim() || null : null;
       } catch {
         return null;

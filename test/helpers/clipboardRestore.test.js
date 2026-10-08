@@ -17,13 +17,13 @@ const fakeClipboard = {
   readText() {
     return this.text;
   },
-  writeText(text) {
+  writeText(text, type) {
     this.text = text;
     this.html = "";
     this.rtf = "";
     this.image = null;
     this.formats = ["text/plain"];
-    this.writes.push(["writeText", text]);
+    this.writes.push(type ? ["writeText", text, type] : ["writeText", text]);
   },
   readHTML() {
     return this.html;
@@ -1420,4 +1420,342 @@ test("other Wayland desktops keep wl-clipboard first for the primary selection",
     syncCalls.map(({ command }) => command),
     ["wl-copy", "wl-paste"]
   );
+});
+
+// Paste review section 3 gaps (review-upstream-linux-paste.md), plus 13-16
+// from slice G.
+
+test("paste 1: KDE clipboard write uses xclip only, never Electron writeText", async () => {
+  resetClipboard();
+  const syncCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = [], options) => {
+      syncCalls.push({ command, args, options });
+      return { status: 0 };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+
+  await withWaylandEnvironment("KDE", () => {
+    manager._writeClipboardWayland("x");
+  });
+
+  assert.equal(syncCalls.length, 1);
+  assert.equal(syncCalls[0].command, "xclip");
+  assert.deepEqual(syncCalls[0].args, ["-selection", "clipboard"]);
+  assert.deepEqual(syncCalls[0].options.stdio, ["pipe", "ignore", "ignore"]);
+  assert.deepEqual(fakeClipboard.writes, []);
+});
+
+test("paste 2: KDE clipboard write falls back to xsel when xclip fails, still no writeText", async () => {
+  resetClipboard();
+  const syncCalls = [];
+  const exitCodes = [1, 0];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = [], options) => {
+      syncCalls.push({ command, args, options });
+      return { status: exitCodes.shift() };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+
+  await withWaylandEnvironment("KDE", () => {
+    manager._writeClipboardWayland("x");
+  });
+
+  assert.deepEqual(
+    syncCalls.map((call) => call.command),
+    ["xclip", "xsel"]
+  );
+  assert.deepEqual(fakeClipboard.writes, []);
+});
+
+test("paste 2: KDE clipboard write falls back to Electron writeText once when both tools fail", async () => {
+  resetClipboard();
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: () => ({ status: 1 }),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+
+  await withWaylandEnvironment("KDE", () => {
+    manager._writeClipboardWayland("x");
+  });
+
+  assert.deepEqual(fakeClipboard.writes, [["writeText", "x"]]);
+});
+
+test("paste 3: KDE primary selection tries xclip, then xsel, then wl-copy at 300ms", async () => {
+  resetClipboard();
+  const syncCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = [], options) => {
+      syncCalls.push({ command, args, options });
+      if (command === "xclip") return { status: 1 };
+      if (command === "xsel") {
+        const error = new Error("not found");
+        error.code = "ENOENT";
+        return { status: null, error };
+      }
+      return { status: 0 };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+
+  await withWaylandEnvironment("KDE", () => {
+    manager._writePrimarySelection("hello");
+  });
+
+  assert.deepEqual(
+    syncCalls.map((call) => call.command),
+    ["xclip", "xsel", "wl-copy"]
+  );
+  assert.equal(syncCalls[2].options.timeout, 300);
+  assert.ok(!fakeClipboard.writes.some((write) => write[2] === "selection"));
+});
+
+test("paste 3: KDE primary selection falls back to Electron's selection target when all tools fail, without logging text", async () => {
+  resetClipboard();
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: () => ({ status: 1 }),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+  const debugLogger = require("../../src/helpers/debugLogger");
+  const originalWarn = debugLogger.warn;
+  let captured;
+  debugLogger.warn = (_message, meta) => {
+    captured = meta;
+  };
+
+  try {
+    await withWaylandEnvironment("KDE", () => {
+      manager._writePrimarySelection("secret text");
+    });
+  } finally {
+    debugLogger.warn = originalWarn;
+  }
+
+  assert.equal(captured.attempts.length, 3);
+  for (const attempt of captured.attempts) {
+    assert.ok(!("text" in attempt));
+  }
+  assert.deepEqual(fakeClipboard.writes.at(-1), ["writeText", "secret text", "selection"]);
+});
+
+test("paste 4: GNOME primary selection wl-copy uses upstream's 50ms budget", async () => {
+  resetClipboard();
+  const syncCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = [], options) => {
+      syncCalls.push({ command, args, options });
+      return { status: 0 };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "wl-copy";
+
+  await withWaylandEnvironment("GNOME", () => {
+    manager._writePrimarySelection("hello");
+  });
+
+  assert.equal(syncCalls.length, 1);
+  assert.equal(syncCalls[0].command, "wl-copy");
+  assert.equal(syncCalls[0].options.timeout, 50);
+  assert.deepEqual(syncCalls[0].options.stdio, ["pipe", "ignore", "ignore"]);
+});
+
+test("paste 5: _pasteText hands the async kdotool probe straight to pasteLinux", async () => {
+  const manager = new ClipboardManager();
+  let capturedOptions;
+  manager._detectKdeWindowClassAsync = () => Promise.resolve("sentinel-window-class");
+  manager._writeClipboardWayland = () => {};
+  manager._writePrimarySelection = () => {};
+  manager.pasteLinux = async (_originalClipboard, options) => {
+    capturedOptions = options;
+    return { restoreComplete: Promise.resolve() };
+  };
+
+  await withWaylandEnvironment("KDE", () =>
+    manager._pasteText("hello", { restoreClipboard: false })
+  );
+
+  assert.equal(await capturedOptions.kdeWindowClass, "sentinel-window-class");
+});
+
+test("paste 6: pasteLinux swallows a rejecting kdeWindowClass probe without an unhandled rejection", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [1, 1]),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+  manager.portalUnavailable = true;
+  let syncProbeCalled = false;
+  manager._detectKdeWindowClass = () => {
+    syncProbeCalled = true;
+    return "konsole";
+  };
+
+  const unhandled = [];
+  const onUnhandled = (error) => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await assert.rejects(
+      withWaylandEnvironment("KDE", () =>
+        manager.pasteLinux(null, { kdeWindowClass: Promise.reject(new Error("boom")) })
+      ),
+      { code: "PASTE_SIMULATION_FAILED" }
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandled);
+  }
+
+  assert.equal(syncProbeCalled, true);
+  assert.deepEqual(unhandled, []);
+});
+
+test("paste 7: _detectKdeWindowClassAsync resolves null on a non-zero exit", async () => {
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSpawn(spawnCalls, [1], { stdout: ["x\n"] }),
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "kdotool";
+
+  assert.equal(await manager._detectKdeWindowClassAsync(), null);
+});
+
+test("paste 7: _detectKdeWindowClassAsync clears its kill timer on a spawn error", async (t) => {
+  const processUtils = require("../../src/utils/process");
+  const originalKillProcess = processUtils.killProcess;
+  let killCalls = 0;
+  processUtils.killProcess = (...args) => {
+    killCalls++;
+    return originalKillProcess(...args);
+  };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  try {
+    const TestClipboardManager = loadClipboardManager({
+      spawn: () => {
+        const proc = new EventEmitter();
+        proc.stdout = new EventEmitter();
+        process.nextTick(() => proc.emit("error", new Error("ENOENT")));
+        return proc;
+      },
+    });
+    const manager = new TestClipboardManager();
+    manager.commandExists = (command) => command === "kdotool";
+
+    const result = await manager._detectKdeWindowClassAsync();
+    t.mock.timers.tick(1000);
+
+    assert.equal(result, null);
+    assert.equal(killCalls, 0);
+  } finally {
+    processUtils.killProcess = originalKillProcess;
+  }
+});
+
+test("paste 11: KDE primary selection read falls back to xsel, never wl-paste", async () => {
+  const syncCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = []) => {
+      syncCalls.push({ command, args });
+      return { status: 0, stdout: Buffer.from("hello") };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "xsel";
+
+  const result = await withWaylandEnvironment("KDE", () => manager._readPrimarySelection());
+
+  assert.equal(result, "hello");
+  assert.deepEqual(
+    syncCalls.map((call) => [call.command, ...call.args]),
+    [["xsel", "--primary", "--output"]]
+  );
+});
+
+test("paste 12: KDE Wayland restore after 1200ms goes through xclip, not Electron writeText", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  resetClipboard();
+  const syncCalls = [];
+  const spawnCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSuccessfulSpawn(spawnCalls),
+    spawnSync: (command, args = []) => {
+      syncCalls.push({ command, args });
+      return { status: 0 };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = (command) => command === "ydotool" || command === "xclip";
+  manager.resolveLinuxFastPasteBinary = () => null;
+  manager._isYdotoolDaemonRunning = () => true;
+  manager._isYdotoolLegacy = () => false;
+
+  const originalClipboard = { type: "text", data: "previous clipboard" };
+  const originalPrimary = "previous primary";
+
+  // Restore fires from a timer well after this call returns, so the KDE
+  // environment must stay active for it — _writeClipboardWayland re-reads
+  // the session fresh on every call.
+  await withWaylandEnvironment("KDE", async () => {
+    const result = await manager.pasteLinux(originalClipboard, {
+      originalPrimary,
+      expectedClipboardText: "dictated text",
+    });
+    fakeClipboard.text = "dictated text";
+    t.mock.timers.tick(1200);
+    await result.restoreComplete;
+  });
+
+  assert.deepEqual(
+    syncCalls.map((call) => [call.command, ...call.args]),
+    [
+      ["xclip", "-selection", "clipboard"],
+      ["xclip", "-selection", "primary"],
+    ]
+  );
+  assert.ok(!fakeClipboard.writes.some((write) => write[0] === "writeText"));
+});
+
+test("paste 13: KDE selection capture skips wl-clipboard; GNOME keeps it first", async () => {
+  const syncCalls = [];
+  const TestClipboardManager = loadClipboardManager({
+    spawnSync: (command, args = []) => {
+      syncCalls.push({ command, args });
+      return { status: 0, stdout: Buffer.from("captured") };
+    },
+  });
+  const manager = new TestClipboardManager();
+  manager.commandExists = () => true;
+
+  await withWaylandEnvironment("KDE", () => {
+    manager._writeClipboardTextAll("s");
+    manager._readClipboardTextAll();
+  });
+
+  assert.deepEqual(
+    syncCalls.map((call) => call.command),
+    ["xclip", "xsel", "xclip", "xsel"]
+  );
+
+  syncCalls.length = 0;
+  await withWaylandEnvironment("GNOME", () => {
+    manager._writeClipboardTextAll("s");
+    manager._readClipboardTextAll();
+  });
+
+  assert.equal(syncCalls[0].command, "wl-copy");
+  assert.equal(syncCalls[3].command, "wl-paste");
 });
