@@ -27,6 +27,13 @@ import {
 } from "./preparedMicCapture";
 import { MicStreamHold } from "./micStreamHold";
 import { PcmTap } from "./pcmTap";
+import { createCaptureReadyGate } from "./captureReadyGate";
+import {
+  STREAMING_AUDIO_DROPPED,
+  STREAMING_CONNECTION_FAILED,
+  STREAMING_CONNECTION_LOST,
+  STREAMING_SESSION_ERROR,
+} from "./streamingConnectionErrors";
 import { ActiveMicRecoveryController } from "./activeMicRecovery";
 import { followsSystemDefaultMic } from "./micSelectionRecovery";
 import { isCacheableMicrophoneResolution, resolvePreferredMicrophone } from "./microphoneSelection";
@@ -429,7 +436,8 @@ const STREAMING_PROVIDERS = {
     // marker, so the stop path settles on that marker instead of a timer.
     awaitsFinalTranscript: true,
     onFinalized: (cb) => window.electronAPI.onSonioxFinalized(cb),
-    warmup: (opts) => window.electronAPI.sonioxStreamingWarmup(opts),
+    // No warmup: a socket kept open between dictations is billed as streaming.
+    // The cold-start buffer hides the handshake instead.
     start: (opts) => window.electronAPI.sonioxStreamingStart(opts),
     send: (buf) => window.electronAPI.sonioxStreamingSend(buf),
     finalize: () => window.electronAPI.sonioxStreamingFinalize(),
@@ -438,6 +446,9 @@ const STREAMING_PROVIDERS = {
     onPartial: (cb) => window.electronAPI.onSonioxPartialTranscript(cb),
     onFinal: (cb) => window.electronAPI.onSonioxFinalTranscript(cb),
     onError: (cb) => window.electronAPI.onSonioxError(cb),
+    onStreamIssue: (cb) => window.electronAPI.onSonioxStreamIssue(cb),
+    // Its error frames sound the error cue (the toast text stays as it is).
+    errorCode: STREAMING_SESSION_ERROR,
     onSessionEnd: (cb) => window.electronAPI.onSonioxSessionEnd(cb),
   },
   "openai-realtime": makeDictationRealtimeProvider("openai-realtime"),
@@ -573,6 +584,9 @@ class AudioManager {
     this.onError = null;
     this.onTranscriptionComplete = null;
     this.onPartialTranscript = null;
+    this.onCaptureAudible = null;
+    this.onStreamWarning = null;
+    this._startCueGate = null;
     this.micCaptureStatus = "inactive";
     this.cachedApiKey = null;
     this.cachedApiKeyProvider = null;
@@ -837,9 +851,17 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     onPartialTranscript,
     onStreamingCommit,
     onTranslationFallback,
+    // Optional: the streaming microphone delivered its first non-silent frame
+    // (or the ceiling passed without one), the moment to sound the start cue.
+    onCaptureAudible = undefined,
+    // Optional: a failure that leaves the recording running, shown without
+    // ending the dictation.
+    onStreamWarning = undefined,
   }) {
     this.onStateChange = onStateChange;
     this.onError = onError;
+    this.onCaptureAudible = onCaptureAudible;
+    this.onStreamWarning = onStreamWarning;
     this.onNoAudio = onNoAudio;
     this.onTranscriptionComplete = onTranscriptionComplete;
     this.onPartialTranscript = onPartialTranscript;
@@ -4436,25 +4458,29 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       const provider = STREAMING_PROVIDERS[providerName];
       const [, wsResult] = await Promise.all([
         this.cacheMicrophoneDeviceId(),
-        withSessionRefresh(async () => {
-          const settings = getSettings();
-          const res = await provider.warmup(
-            buildStreamingSessionOptions({
-              providerName,
-              settings,
-              language: settings.preferredLanguage,
-              keyterms: this.getKeyterms(),
-              voiceAgentRequested: this.voiceAgentRequested,
+        // A provider without a warm socket still gets the worklet and mic
+        // driver warm-up below.
+        provider.warmup
+          ? withSessionRefresh(async () => {
+              const settings = getSettings();
+              const res = await provider.warmup(
+                buildStreamingSessionOptions({
+                  providerName,
+                  settings,
+                  language: settings.preferredLanguage,
+                  keyterms: this.getKeyterms(),
+                  voiceAgentRequested: this.voiceAgentRequested,
+                })
+              );
+              // Throw error to trigger retry if AUTH_EXPIRED
+              if (!res.success && res.code) {
+                const err = new Error(res.error || "Warmup failed");
+                err.code = res.code;
+                throw err;
+              }
+              return res;
             })
-          );
-          // Throw error to trigger retry if AUTH_EXPIRED
-          if (!res.success && res.code) {
-            const err = new Error(res.error || "Warmup failed");
-            err.code = res.code;
-            throw err;
-          }
-          return res;
-        }),
+          : { success: true },
       ]);
 
       if (wsResult.success) {
@@ -4590,6 +4616,26 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     } finally {
       this._streamingMicSwapPromise = null;
     }
+  }
+
+  // The start cue waits for a microphone that really delivers audio, not for the
+  // provider connection (which can take hundreds of ms and buffers the opening
+  // words meanwhile). Capture never waits for the cue.
+  _armStartCueGate(ownsSession) {
+    this._disarmStartCueGate();
+    this._startCueGate = createCaptureReadyGate({
+      onReady: ({ reason, elapsedMs }) => {
+        this._startCueGate = null;
+        if (!ownsSession() || !this.isStreaming || !this.isRecording) return;
+        logger.debug("Microphone capture ready for the start cue", { reason, elapsedMs }, "audio");
+        this.onCaptureAudible?.();
+      },
+    });
+  }
+
+  _disarmStartCueGate() {
+    this._startCueGate?.cancel();
+    this._startCueGate = null;
   }
 
   _waitForStreamingStartSettlement() {
@@ -4777,6 +4823,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           this._streamingFlushResolve?.();
           return;
         }
+        this._startCueGate?.feed(event.data);
         // Measured from the first chunk: a recording that fails over later
         // still has its opening words in the gate.
         recordPcm16SpeechWindow(this._streamingSpeechGateState, event.data);
@@ -4785,6 +4832,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
       this.isStreaming = true;
       this.streamingSource.connect(this.streamingProcessor);
+      this._armStartCueGate(ownsSession);
 
       const tPipeline = performance.now();
 
@@ -4817,6 +4865,19 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         }
       });
 
+      const autoStopAfterConnectionLoss = () => {
+        if (this.isStreaming) {
+          logger.warn("Connection lost during streaming, auto-stopping", {}, "streaming");
+          this.stopStreamingRecording().catch((e) => {
+            logger.error(
+              "Auto-stop after connection loss failed",
+              { error: e.message },
+              "streaming"
+            );
+          });
+        }
+      };
+
       const errorCleanup = provider.onError((error) => {
         if (!ownsSession()) return;
         logger.error("Streaming provider error", { error }, "streaming");
@@ -4829,19 +4890,38 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           return;
         }
         this.onError?.({
+          code: provider.errorCode,
           title: "Streaming Error",
           description: error,
         });
-        if (this.isStreaming) {
-          logger.warn("Connection lost during streaming, auto-stopping", {}, "streaming");
-          this.stopStreamingRecording().catch((e) => {
-            logger.error(
-              "Auto-stop after connection loss failed",
-              { error: e.message },
-              "streaming"
-            );
+        autoStopAfterConnectionLoss();
+      });
+
+      // A provider that tells a dead or missing connection apart from other
+      // errors (Soniox) reports it here; the user hears and reads that the
+      // dictation may be incomplete.
+      const streamIssueCleanup = provider.onStreamIssue?.((issue) => {
+        if (!ownsSession()) return;
+        logger.error(
+          "Streaming connection problem",
+          { kind: issue.kind, error: issue.message },
+          "streaming"
+        );
+        if (issue.kind === "audio_dropped") {
+          // The socket may still come up, so the recording keeps going.
+          this.onStreamWarning?.({
+            code: STREAMING_AUDIO_DROPPED,
+            messageKey: "hooks.audioRecording.streamingConnection.audioDropped.description",
           });
+          return;
         }
+        this.onError?.({
+          code: STREAMING_CONNECTION_LOST,
+          title: "Connection Lost",
+          description: issue.message,
+          messageKey: "hooks.audioRecording.streamingConnection.lost.description",
+        });
+        autoStopAfterConnectionLoss();
       });
 
       const sessionEndCleanup = provider.onSessionEnd((data) => {
@@ -4861,6 +4941,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         partialCleanup,
         finalCleanup,
         errorCleanup,
+        streamIssueCleanup,
         sessionEndCleanup,
         finalizedCleanup,
       ].filter(Boolean);
@@ -4995,8 +5076,12 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
       let errorTitle = "Streaming Error";
       let errorDescription = `Failed to start streaming: ${error.message}`;
+      let errorMessageKey = error.messageKey;
 
-      if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+      if (error.code === STREAMING_CONNECTION_FAILED) {
+        errorTitle = "Connection Failed";
+        errorMessageKey = "hooks.audioRecording.streamingConnection.failed.description";
+      } else if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
         errorTitle = "Microphone Access Denied";
         errorDescription =
           "Please grant microphone permission in your system settings and try again.";
@@ -5018,7 +5103,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
       this.onError?.({
         code: error.code,
-        messageKey: error.messageKey,
+        messageKey: errorMessageKey,
         title: errorTitle,
         description: errorDescription,
       });
@@ -5222,6 +5307,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this.recordingStartTime = null;
     this.onStateChange?.({ isRecording: false, isProcessing: true, isStreaming: false });
 
+    this._disarmStartCueGate();
     this.micRecovery.stop();
     // Let an in-flight mic swap settle so its fallback segment isn't lost and
     // its replacement recorder doesn't outlive this stop.
@@ -5901,6 +5987,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
   }
 
   cleanupStreamingAudio() {
+    this._disarmStartCueGate();
     this._streamingFlushResolve?.();
     this._streamingFlushResolve = null;
     if (this.streamingFallbackRecorder?.state === "recording") {
@@ -6012,6 +6099,8 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this.onTranscriptionComplete = null;
     this.onPartialTranscript = null;
     this.onStreamingCommit = null;
+    this.onCaptureAudible = null;
+    this.onStreamWarning = null;
     if (this._onApiKeyChanged) {
       window.removeEventListener("api-key-changed", this._onApiKeyChanged);
     }

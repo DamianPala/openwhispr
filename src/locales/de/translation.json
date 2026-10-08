@@ -904,17 +904,6 @@
       "removeFillers": {
         "label": "Füllwörter entfernen",
         "description": "Entfernt \"um\", \"uh\", \"yyy\", bevor der Text eingefügt wird."
-      },
-      "keepAlive": {
-        "label": "Keep-Alive",
-        "description": "Hält die Verbindung zwischen Aufnahmen offen, damit die nächste sofort startet. Soniox berechnet die Leerlaufzeit als Streaming.",
-        "options": {
-          "0": "Aus",
-          "30": "30 Sekunden (+50–100 % Kosten)",
-          "60": "1 Minute (+100–150 % Kosten)",
-          "120": "2 Minuten (+100–200 % Kosten)",
-          "300": "5 Minuten (+200–300 % Kosten)"
-        }
       }
     },
     "tinfoil": {
@@ -951,6 +940,20 @@
       "micRestored": {
         "title": "Mikrofon wiederhergestellt",
         "description": "Die Audioaufnahme wurde fortgesetzt."
+      },
+      "streamingConnection": {
+        "failed": {
+          "title": "Verbindung fehlgeschlagen",
+          "description": "Die Verbindung zum Transkriptionsdienst konnte nicht hergestellt werden, deshalb wurde dieses Diktat nicht transkribiert. Überprüfe deine Verbindung und versuche es erneut."
+        },
+        "lost": {
+          "title": "Verbindung unterbrochen",
+          "description": "Die Verbindung zum Transkriptionsdienst ist abgebrochen. Bisher transkribierter Text bleibt erhalten, das Diktat ist aber möglicherweise unvollständig."
+        },
+        "audioDropped": {
+          "title": "Diktat möglicherweise unvollständig",
+          "description": "Der Verbindungsaufbau hat zu lange gedauert, deshalb wurde ein Teil dieses Diktats verworfen."
+        }
       },
       "partialTranscription": {
         "title": "Unvollständige Transkription",

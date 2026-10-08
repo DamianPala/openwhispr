@@ -2933,26 +2933,13 @@ declare global {
       ) => () => void;
 
       // Soniox Streaming (BYOK-only)
-      sonioxStreamingWarmup?: (
-        options?: DictationRealtimeSessionOptions & {
-          extraLanguages?: string[];
-          region?: string;
-          keepAliveTimeout?: number;
-          removeFillers?: boolean;
-        }
-      ) => Promise<
-        { success: boolean; alreadyWarm?: boolean; error?: string } & PolicyFailureMetadata
-      >;
       sonioxStreamingStart?: (
         options?: DictationRealtimeSessionOptions & {
           extraLanguages?: string[];
           region?: string;
-          keepAliveTimeout?: number;
           removeFillers?: boolean;
         }
-      ) => Promise<
-        { success: boolean; usedWarmConnection?: boolean; error?: string } & PolicyFailureMetadata
-      >;
+      ) => Promise<{ success: boolean; error?: string } & PolicyFailureMetadata>;
       sonioxStreamingSend?: (audioBuffer: ArrayBuffer) => void;
       sonioxStreamingFinalize?: () => void;
       sonioxStreamingStop?: () => Promise<{
@@ -2969,6 +2956,9 @@ declare global {
       onSonioxPartialTranscript?: (callback: (text: string) => void) => () => void;
       onSonioxFinalTranscript?: (callback: (text: string) => void) => () => void;
       onSonioxError?: (callback: (error: string) => void) => () => void;
+      onSonioxStreamIssue?: (
+        callback: (issue: { kind: "connection_lost" | "audio_dropped"; message?: string }) => void
+      ) => () => void;
       onSonioxSessionEnd?: (callback: (data: { text?: string }) => void) => () => void;
       onSonioxFinalized?: (callback: () => void) => () => void;
 

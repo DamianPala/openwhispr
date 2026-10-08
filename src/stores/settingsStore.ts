@@ -331,7 +331,6 @@ const NUMERIC_SETTINGS = new Set([
   "micWarmHoldSeconds",
   "audioRetentionDays",
   "transcriptRetentionDays",
-  "sonioxKeepAliveTimeout",
   "whisperVadThreshold",
   "whisperVadMinSpeechDurationMs",
   "whisperVadMinSilenceDurationMs",
@@ -1173,11 +1172,9 @@ export interface SettingsState
   // Soniox (BYOK)
   sonioxExtraLanguages: string[];
   sonioxRegion: string;
-  sonioxKeepAliveTimeout: number;
   sonioxRemoveFillers: boolean;
   setSonioxExtraLanguages: (codes: string[]) => void;
   setSonioxRegion: (value: string) => void;
-  setSonioxKeepAliveTimeout: (value: number) => void;
   setSonioxRemoveFillers: (value: boolean) => void;
 
   // Enterprise providers
@@ -1564,7 +1561,6 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   cortiTenant: readString("cortiTenant", "base"),
   sonioxExtraLanguages: readStringArray("sonioxExtraLanguages", []),
   sonioxRegion: readString("sonioxRegion", "us"),
-  sonioxKeepAliveTimeout: readNumber("sonioxKeepAliveTimeout", 0),
   sonioxRemoveFillers: readBoolean("sonioxRemoveFillers", true),
   customDictionary: readStringArray("customDictionary", []),
   snippets: (() => {
@@ -2257,7 +2253,6 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     set({ sonioxExtraLanguages: deduped });
   },
   setSonioxRegion: createStringSetter("sonioxRegion"),
-  setSonioxKeepAliveTimeout: createNumberSetter("sonioxKeepAliveTimeout"),
   setSonioxRemoveFillers: createBooleanSetter("sonioxRemoveFillers"),
   setCustomTranscriptionApiKey: (key: string) => {
     set({ customTranscriptionApiKey: key });

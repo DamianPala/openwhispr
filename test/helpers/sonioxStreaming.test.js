@@ -4,6 +4,7 @@ const net = require("node:net");
 const { WebSocketServer, WebSocket } = require("ws");
 const SonioxStreaming = require("../../src/helpers/sonioxStreaming");
 const debugLogger = require("../../src/helpers/debugLogger");
+const { STREAMING_CONNECTION_FAILED } = require("../../src/helpers/streamingConnectionErrors");
 
 const { removeFillers, buildConfigMessage, DEFAULT_MODEL } = SonioxStreaming;
 
@@ -422,8 +423,8 @@ describe("buildWebSocketUrl", () => {
   }
 });
 
-// Loopback Soniox: connect()/warmup() resolve on the socket opening, so the
-// server doesn't need to reply for either to settle. Each accepted connection
+// Loopback Soniox: connect() resolves on the socket opening, so the server
+// doesn't need to reply for it to settle. Each accepted connection
 // is recorded with the messages it received and whether it was later closed.
 async function withSonioxServer(run) {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -448,145 +449,164 @@ async function withSonioxServer(run) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("warm connection promotion (loopback)", () => {
-  it("reuses the warm socket when identity matches: one socket, config sent once", async () => {
+describe("no warm socket between dictations", () => {
+  it("opens a fresh socket and sends the config for every connect", async () => {
     await withSonioxServer(async (url, connections) => {
       const streaming = new SonioxStreaming();
       streaming.buildWebSocketUrl = () => url;
       // A non-default model: currentModel starts at DEFAULT_MODEL, so only a
-      // different id proves the promoted session recorded what was sent.
-      const options = { apiKey: "k", mode: "byok", model: "stt-rt-v4", region: "us" };
+      // different id proves the session recorded what was sent.
+      const options = { apiKey: "k", mode: "byok", model: "stt-rt-v4" };
       try {
-        await streaming.warmup(options);
+        await streaming.connect(options);
+        await streaming.disconnect(false);
         await streaming.connect(options);
         await wait(20);
 
-        assert.equal(connections.length, 1, "the warm socket was reused, not a second one opened");
-        assert.equal(connections[0].messages.length, 1, "config was sent once, during warmup");
-        assert.equal(JSON.parse(connections[0].messages[0]).model, "stt-rt-v4");
-        assert.equal(streaming.isConnected, true);
+        assert.equal(connections.length, 2, "each dictation got its own socket");
+        for (const connection of connections) {
+          assert.equal(connection.messages.length, 1, "config only");
+          assert.equal(JSON.parse(connection.messages[0]).model, "stt-rt-v4");
+        }
         assert.equal(streaming.currentModel, "stt-rt-v4");
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
 
-  it("cold-starts and closes the warm socket when identity differs (region)", async () => {
+  it("closes the socket when the dictation ends", async () => {
     await withSonioxServer(async (url, connections) => {
       const streaming = new SonioxStreaming();
       streaming.buildWebSocketUrl = () => url;
       try {
-        await streaming.warmup({ apiKey: "k", mode: "byok", region: "us" });
-        await streaming.connect({ apiKey: "k", mode: "byok", region: "eu" });
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        await streaming.disconnect(true);
         await wait(20);
 
-        assert.equal(connections.length, 2, "a second, cold socket was opened");
-        assert.equal(connections[0].closed, true, "the mismatched warm socket was closed");
-        assert.equal(streaming.isConnected, true);
-        assert.equal(streaming.hasWarmConnection(), false);
-      } finally {
-        streaming.cleanupAll();
-      }
-    });
-  });
-
-  it("reuses the warm socket when region is undefined and the session requests us (same normalized region)", async () => {
-    await withSonioxServer(async (url, connections) => {
-      const streaming = new SonioxStreaming();
-      streaming.buildWebSocketUrl = () => url;
-      try {
-        await streaming.warmup({ apiKey: "k", mode: "byok" });
-        await streaming.connect({ apiKey: "k", mode: "byok", region: "us" });
-        await wait(20);
-
-        assert.equal(connections.length, 1, "the warm socket was reused, not a second one opened");
-        assert.equal(streaming.isConnected, true);
-      } finally {
-        streaming.cleanupAll();
-      }
-    });
-  });
-
-  it("cold-starts when region is undefined but the session requests jp (different normalized region)", async () => {
-    await withSonioxServer(async (url, connections) => {
-      const streaming = new SonioxStreaming();
-      streaming.buildWebSocketUrl = () => url;
-      try {
-        await streaming.warmup({ apiKey: "k", mode: "byok" });
-        await streaming.connect({ apiKey: "k", mode: "byok", region: "jp" });
-        await wait(20);
-
-        assert.equal(connections.length, 2, "a second, cold socket was opened");
-        assert.equal(connections[0].closed, true, "the mismatched warm socket was closed");
-        assert.equal(streaming.isConnected, true);
-        assert.equal(streaming.hasWarmConnection(), false);
-      } finally {
-        streaming.cleanupAll();
-      }
-    });
-  });
-
-  it("closes the warm socket after its idle timeout elapses unused", async () => {
-    await withSonioxServer(async (url, connections) => {
-      const streaming = new SonioxStreaming();
-      streaming.buildWebSocketUrl = () => url;
-      try {
-        await streaming.warmup({ apiKey: "k", mode: "byok", idleTimeoutMs: 30 });
-        assert.equal(streaming.hasWarmConnection(), true);
-
-        await wait(80);
-
-        assert.equal(streaming.hasWarmConnection(), false, "idle timeout closed the warm socket");
         assert.equal(connections[0].closed, true);
+        assert.equal(streaming.ws, null);
+        assert.equal(streaming.isConnected, false);
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
+});
 
-  it("cold-starts when the extra languages differ from the warmed-up set", async () => {
-    await withSonioxServer(async (url, connections) => {
-      const streaming = new SonioxStreaming();
-      streaming.buildWebSocketUrl = () => url;
-      try {
-        await streaming.warmup({
-          apiKey: "k",
-          mode: "byok",
-          language: "en",
-          extraLanguages: ["pl"],
-        });
-        await streaming.connect({
-          apiKey: "k",
-          mode: "byok",
-          language: "en",
-          extraLanguages: ["de"],
-        });
-        await wait(20);
-
-        assert.equal(connections.length, 2, "a second, cold socket was opened");
-        assert.equal(connections[0].closed, true, "the mismatched warm socket was closed");
-        assert.equal(streaming.isConnected, true);
-      } finally {
-        streaming.cleanupAll();
-      }
+describe("connection failures (loopback)", () => {
+  it("tags a handshake the server refuses, without a second report", async () => {
+    const server = new WebSocketServer({
+      host: "127.0.0.1",
+      port: 0,
+      verifyClient: (_info, done) => done(false, 503, "Service Unavailable"),
     });
+    await new Promise((resolve) => server.once("listening", resolve));
+    const streaming = new SonioxStreaming();
+    streaming.buildWebSocketUrl = () =>
+      `ws://127.0.0.1:${server.address().port}/transcribe-websocket`;
+    const reported = [];
+    streaming.onError = (err) => reported.push(err);
+    streaming.onConnectionLost = (err) => reported.push(err);
+    try {
+      await assert.rejects(streaming.connect({ apiKey: "k", mode: "byok" }), (err) => {
+        assert.equal(err.code, STREAMING_CONNECTION_FAILED);
+        return true;
+      });
+      await wait(20);
+      assert.deepEqual(reported, [], "the rejected connect() is the one report");
+    } finally {
+      streaming.cleanup();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
-  it("cold-starts when the filler-removal flag differs from the warmed-up session", async () => {
+  it("tags a refused connection, without a second report", async () => {
+    // Bind and release a port so nothing is listening on it.
+    const probe = net.createServer();
+    await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address();
+    await new Promise((resolve) => probe.close(resolve));
+    const streaming = new SonioxStreaming();
+    streaming.buildWebSocketUrl = () => `ws://127.0.0.1:${port}/transcribe-websocket`;
+    const reported = [];
+    streaming.onError = (err) => reported.push(err);
+    try {
+      await assert.rejects(streaming.connect({ apiKey: "k", mode: "byok" }), (err) => {
+        assert.equal(err.code, STREAMING_CONNECTION_FAILED);
+        assert.match(err.message, /ECONNREFUSED/);
+        return true;
+      });
+      await wait(20);
+      assert.deepEqual(reported, []);
+    } finally {
+      streaming.cleanup();
+    }
+  });
+
+  it("tags a handshake that never completes as a connection failure", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const streaming = new SonioxStreaming();
+    streaming.buildWebSocketUrl = () =>
+      `ws://127.0.0.1:${server.address().port}/transcribe-websocket`;
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const connectPromise = streaming.connect({ apiKey: "k", mode: "byok" });
+      mock.timers.tick(15000);
+      await assert.rejects(connectPromise, (err) => {
+        assert.equal(err.code, STREAMING_CONNECTION_FAILED);
+        assert.match(err.message, /timeout/);
+        return true;
+      });
+    } finally {
+      mock.timers.reset();
+      streaming.cleanup();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("does not tag a deliberate disconnect during the handshake", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const streaming = new SonioxStreaming();
+    streaming.buildWebSocketUrl = () =>
+      `ws://127.0.0.1:${server.address().port}/transcribe-websocket`;
+    try {
+      const connectPromise = streaming.connect({ apiKey: "k", mode: "byok" });
+      await streaming.disconnect(true);
+      await assert.rejects(connectPromise, (err) => {
+        assert.equal(err.code, undefined);
+        return true;
+      });
+    } finally {
+      streaming.cleanup();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("reports a socket that drops mid-dictation once, as a lost connection", async () => {
     await withSonioxServer(async (url, connections) => {
       const streaming = new SonioxStreaming();
       streaming.buildWebSocketUrl = () => url;
+      const lost = [];
+      const errors = [];
+      streaming.onConnectionLost = (err) => lost.push(err);
+      streaming.onError = (err) => errors.push(err);
       try {
-        await streaming.warmup({ apiKey: "k", mode: "byok", removeFillers: true });
-        await streaming.connect({ apiKey: "k", mode: "byok", removeFillers: false });
-        await wait(20);
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        connections[0].socket.terminate();
+        await wait(30);
 
-        assert.equal(connections.length, 2, "a second, cold socket was opened");
-        assert.equal(connections[0].closed, true, "the mismatched warm socket was closed");
-        assert.equal(streaming.isConnected, true);
+        assert.equal(lost.length, 1);
+        assert.deepEqual(errors, [], "a lost connection is not also a plain error");
+        assert.equal(streaming.isConnected, false);
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -624,7 +644,106 @@ describe("message handling (loopback)", () => {
         );
         assert.equal(sessionEnded, true);
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
+      }
+    });
+  });
+
+  it("reports an error_code message and the close that follows as one failure", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      const errors = [];
+      const lost = [];
+      streaming.onError = (err) => errors.push(err);
+      streaming.onConnectionLost = (err) => lost.push(err);
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        connections[0].socket.send(
+          JSON.stringify({ error_code: 401, error_message: "invalid api key" })
+        );
+        await wait(20);
+        connections[0].socket.close();
+        await wait(30);
+
+        assert.equal(errors.length, 1);
+        assert.match(errors[0].message, /Soniox error 401: invalid api key/);
+        assert.deepEqual(lost, [], "the server's close is not a second failure");
+        assert.equal(streaming.isConnected, false);
+      } finally {
+        streaming.cleanup();
+      }
+    });
+  });
+
+  it("reports an error_code message once when the stop lands before the server's close", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      const errors = [];
+      const lost = [];
+      streaming.onError = (err) => errors.push(err);
+      streaming.onConnectionLost = (err) => lost.push(err);
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        connections[0].socket.send(JSON.stringify({ error_code: 401, error_message: "bad key" }));
+        await wait(20);
+        await streaming.disconnect(true);
+        connections[0].socket.close();
+        await wait(30);
+
+        assert.equal(errors.length, 1);
+        assert.deepEqual(lost, []);
+      } finally {
+        streaming.cleanup();
+      }
+    });
+  });
+
+  it("reports an error_code message once when the server drops the socket without a close frame", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      const errors = [];
+      const lost = [];
+      streaming.onError = (err) => errors.push(err);
+      streaming.onConnectionLost = (err) => lost.push(err);
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        connections[0].socket.send(JSON.stringify({ error_code: 402, error_message: "quota" }));
+        await wait(20);
+        connections[0].socket.terminate();
+        await wait(30);
+
+        assert.equal(errors.length, 1);
+        assert.deepEqual(lost, []);
+      } finally {
+        streaming.cleanup();
+      }
+    });
+  });
+
+  it("a later dictation reports its own lost connection after an earlier error_code", async () => {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      const lost = [];
+      streaming.onError = () => {};
+      streaming.onConnectionLost = (err) => lost.push(err);
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        connections[0].socket.send(JSON.stringify({ error_code: 400, error_message: "bad" }));
+        await wait(20);
+        connections[0].socket.terminate();
+        await wait(30);
+
+        await streaming.connect({ apiKey: "k", mode: "byok" });
+        connections[1].socket.terminate();
+        await wait(30);
+
+        assert.equal(lost.length, 1);
+      } finally {
+        streaming.cleanup();
       }
     });
   });
@@ -772,7 +891,7 @@ describe("message handling (loopback)", () => {
         assert.equal(finalizedCalls, 1);
         assert.equal(streaming.onFinalized, onFinalized);
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -800,7 +919,7 @@ describe("message handling (loopback)", () => {
         clientWs.emit("error", new Error("late, stale error"));
         assert.deepEqual(events, ["sessionEnd", "error"]);
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -859,7 +978,7 @@ describe("message handling (loopback)", () => {
         assert.equal(textFrames.length, 3, "config, finalize, and the end-of-audio marker only");
         assert.equal(textFrames[2], "");
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -916,7 +1035,7 @@ describe("message handling (loopback)", () => {
         assert.equal(textFrames[2], "");
         assert.equal(result.text, "done");
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -935,7 +1054,7 @@ describe("message handling (loopback)", () => {
         assert.deepEqual(events, ["sessionEnd", "error"]);
       } finally {
         mock.timers.reset();
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -962,7 +1081,7 @@ describe("connect lifecycle (loopback)", () => {
 
       assert.equal(streaming.connectionTimeout, null);
     } finally {
-      streaming.cleanupAll();
+      streaming.cleanup();
       await new Promise((resolve) => server.close(resolve));
     }
   });
@@ -976,31 +1095,12 @@ describe("connect lifecycle (loopback)", () => {
         const p2 = streaming.connect({ apiKey: "k", mode: "byok" });
         const [r1, r2] = await Promise.all([p1, p2]);
 
-        assert.deepEqual(r1, { promoted: false });
-        assert.deepEqual(r2, { promoted: false });
+        assert.equal(r1, undefined);
+        assert.equal(r2, undefined);
         assert.equal(connections.length, 1, "only one socket was opened");
         assert.equal(streaming.isConnected, true);
       } finally {
-        streaming.cleanupAll();
-      }
-    });
-  });
-
-  it("connect() reports whether it promoted a warm socket", async () => {
-    await withSonioxServer(async (url) => {
-      const streaming = new SonioxStreaming();
-      streaming.buildWebSocketUrl = () => url;
-      const options = { apiKey: "k", mode: "byok" };
-      try {
-        const cold = await streaming.connect(options);
-        assert.deepEqual(cold, { promoted: false });
-        await streaming.disconnect(false);
-
-        await streaming.warmup(options);
-        const warm = await streaming.connect(options);
-        assert.deepEqual(warm, { promoted: true });
-      } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -1018,39 +1118,6 @@ describe("finalize", () => {
 const COLD_START_BUFFER_MAX_FOR_TEST = 3 * 16000 * 2;
 
 describe("audio buffering while a connection is imminent (loopback)", () => {
-  it("buffers frames sent between warmup() and connect(), flushing them in order after warm promotion", async () => {
-    await withSonioxServer(async (url, connections) => {
-      const streaming = new SonioxStreaming();
-      streaming.buildWebSocketUrl = () => url;
-      const options = { apiKey: "k", mode: "byok" };
-      try {
-        await streaming.warmup(options);
-
-        // this.ws is still null here — only the warm socket is open — so this
-        // is exactly the gap sendAudio must buffer rather than drop.
-        assert.equal(streaming.sendAudio(Buffer.from("frame-1")), true);
-        assert.equal(streaming.sendAudio(Buffer.from("frame-2")), true);
-
-        await streaming.connect(options);
-        await wait(20);
-
-        assert.equal(
-          connections.length,
-          1,
-          "the warm socket was promoted, not a second one opened"
-        );
-        assert.deepEqual(
-          connections[0].messages.slice(1),
-          ["frame-1", "frame-2"],
-          "buffered frames arrive in order, after the config message warmup already sent"
-        );
-        assert.equal(streaming.isConnected, true);
-      } finally {
-        streaming.cleanupAll();
-      }
-    });
-  });
-
   it("buffers frames sent during a cold-start handshake, flushing them after config", async () => {
     await withSonioxServer(async (url, connections) => {
       const streaming = new SonioxStreaming();
@@ -1070,36 +1137,15 @@ describe("audio buffering while a connection is imminent (loopback)", () => {
         assert.doesNotThrow(() => JSON.parse(connections[0].messages[0]));
         assert.equal(connections[0].messages[1], "frame-1");
       } finally {
-        streaming.cleanupAll();
-      }
-    });
-  });
-
-  it("keeps frames buffered before connect() when the warm socket's identity does not match", async () => {
-    await withSonioxServer(async (url, connections) => {
-      const streaming = new SonioxStreaming();
-      streaming.buildWebSocketUrl = () => url;
-      try {
-        await streaming.warmup({ apiKey: "k", mode: "byok", region: "us" });
-        assert.equal(streaming.sendAudio(Buffer.from("frame-1")), true);
-
-        await streaming.connect({ apiKey: "k", mode: "byok", region: "eu" });
-        await wait(20);
-
-        assert.equal(connections.length, 2, "identity mismatch opened a cold socket");
-        assert.equal(connections[1].messages.length, 2, "config, then the buffered frame");
-        assert.equal(connections[1].messages[1], "frame-1");
-      } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
 
   // After the server ends a session, the renderer keeps sending for a moment
-  // before it notices; with a warm socket ready those frames get buffered. The
-  // stop that always follows must discard them so they never open the next
-  // session as stale audio.
-  it("drops frames buffered after an abnormal session end once the renderer stops", async () => {
+  // before it notices. Those frames belong to no session: they are refused,
+  // never buffered to open the next dictation as stale audio.
+  it("refuses frames sent after an abnormal session end, so none reach the next session", async () => {
     await withSonioxServer(async (url, connections) => {
       const streaming = new SonioxStreaming();
       streaming.buildWebSocketUrl = () => url;
@@ -1110,17 +1156,17 @@ describe("audio buffering while a connection is imminent (loopback)", () => {
         await wait(20);
         assert.equal(streaming.isConnected, false);
 
-        await streaming.warmup(options);
-        assert.equal(streaming.sendAudio(Buffer.from("stale")), true);
+        assert.equal(streaming.sendAudio(Buffer.from("stale")), false);
         await streaming.disconnect(true);
 
+        const connectPromise = streaming.connect(options);
         assert.equal(streaming.sendAudio(Buffer.from("fresh")), true);
-        await streaming.connect(options);
+        await connectPromise;
         await wait(20);
 
         assert.deepEqual(connections[1].messages.slice(1), ["fresh"]);
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
   });
@@ -1178,9 +1224,53 @@ describe("audio buffering while a connection is imminent (loopback)", () => {
 
         await connectPromise;
       } finally {
-        streaming.cleanupAll();
+        streaming.cleanup();
       }
     });
+  });
+
+  it("reports a full buffer once per session, not once per dropped frame", async () => {
+    await withSonioxServer(async (url) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      let drops = 0;
+      streaming.onAudioDropped = () => {
+        drops += 1;
+      };
+      const chunk = Buffer.alloc(20000);
+      const fillBuffer = () => {
+        while (streaming.sendAudio(chunk)) {
+          // keep filling until the cap refuses a frame
+        }
+      };
+      try {
+        const first = streaming.connect({ apiKey: "k", mode: "byok" });
+        assert.equal(drops, 0, "buffering is not a drop");
+        fillBuffer();
+        streaming.sendAudio(chunk);
+        streaming.sendAudio(chunk);
+        assert.equal(drops, 1);
+        await first;
+
+        await streaming.disconnect(false);
+        const second = streaming.connect({ apiKey: "k", mode: "byok" });
+        fillBuffer();
+        assert.equal(drops, 2, "a new session reports its own overflow");
+        await second;
+      } finally {
+        streaming.cleanup();
+      }
+    });
+  });
+
+  it("does not report a frame refused with no connection as a buffer overflow", () => {
+    const streaming = new SonioxStreaming();
+    let drops = 0;
+    streaming.onAudioDropped = () => {
+      drops += 1;
+    };
+    assert.equal(streaming.sendAudio(Buffer.from("frame")), false);
+    assert.equal(drops, 0);
   });
 });
 
@@ -1216,7 +1306,7 @@ describe("connect", () => {
       assert.equal(streaming.isConnected, true);
       assert.equal(server.clients.size, 1, "only the new session socket is open");
     } finally {
-      streaming.cleanupAll();
+      streaming.cleanup();
       await new Promise((resolve) => server.close(resolve));
     }
   });

@@ -250,8 +250,6 @@ const EXTRA_LANGUAGE_OPTIONS: LanguageOption[] = languageRegistry.languages
 
 const EXTRA_LANGUAGE_MAX = 3;
 
-const SONIOX_KEEP_ALIVE_OPTIONS = [0, 30, 60, 120, 300];
-
 const CLOUD_PROVIDER_TABS = [
   { id: "openai", name: "OpenAI" },
   { id: "groq", name: "Groq" },
@@ -504,8 +502,6 @@ export default function TranscriptionModelPicker({
   const setSonioxRegion = useSettingsStore((s) => s.setSonioxRegion);
   const sonioxExtraLanguages = useSettingsStore((s) => s.sonioxExtraLanguages);
   const setSonioxExtraLanguages = useSettingsStore((s) => s.setSonioxExtraLanguages);
-  const sonioxKeepAliveTimeout = useSettingsStore((s) => s.sonioxKeepAliveTimeout);
-  const setSonioxKeepAliveTimeout = useSettingsStore((s) => s.setSonioxKeepAliveTimeout);
   const sonioxRemoveFillers = useSettingsStore((s) => s.sonioxRemoveFillers);
   const setSonioxRemoveFillers = useSettingsStore((s) => s.setSonioxRemoveFillers);
   const preferredLanguage = useSettingsStore((s) => s.preferredLanguage);
@@ -1552,36 +1548,6 @@ export default function TranscriptionModelPicker({
                       <p className="text-[10px] text-muted-foreground">
                         {t("transcription.soniox.removeFillers.description")}
                       </p>
-                    </div>
-                  )}
-
-                  {displayedCloudProvider === "soniox" && (
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between gap-3">
-                        <label className="text-xs font-medium text-foreground whitespace-nowrap">
-                          {t("transcription.soniox.keepAlive.label")}
-                        </label>
-                        <Select
-                          value={String(sonioxKeepAliveTimeout)}
-                          onValueChange={(value) => setSonioxKeepAliveTimeout(Number(value))}
-                        >
-                          <SelectTrigger className="min-w-32 h-8 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {SONIOX_KEEP_ALIVE_OPTIONS.map((seconds) => (
-                              <SelectItem key={seconds} value={String(seconds)}>
-                                {t(`transcription.soniox.keepAlive.options.${seconds}`)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {sonioxKeepAliveTimeout > 0 && (
-                        <p className="text-[10px] text-muted-foreground">
-                          {t("transcription.soniox.keepAlive.description")}
-                        </p>
-                      )}
                     </div>
                   )}
 

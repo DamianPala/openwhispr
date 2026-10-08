@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import AudioManager from "../helpers/audioManager";
 import logger from "../utils/logger";
-import { playStartCue, playStopCue } from "../utils/dictationCues";
+import { playErrorCue, playStartCue, playStopCue } from "../utils/dictationCues";
+import { createDictationCueSession } from "../utils/dictationCueSession";
+import { isStreamingConnectionError } from "../helpers/streamingConnectionErrors";
 import { getSettings } from "../stores/settingsStore";
 import { expandSnippets } from "../utils/snippets";
 import { getRecordingErrorTitle, getRecordingErrorDescription } from "../utils/recordingErrors";
@@ -62,6 +64,11 @@ export const useAudioRecording = (toast, options = {}) => {
   const preparationGenerationRef = useRef(0);
   const dictationErrorGenerationRef = useRef(0);
   const wasRecordingRef = useRef(false);
+  const cueSessionRef = useRef(null);
+  cueSessionRef.current ??= createDictationCueSession({
+    playStart: () => void playStartCue(),
+    playError: () => void playErrorCue(),
+  });
   const pastesInFlightRef = useRef(0);
   const wasMicUnavailableRef = useRef(false);
   const demoKindRef = useRef("dictation");
@@ -137,6 +144,7 @@ export const useAudioRecording = (toast, options = {}) => {
       startLockRef.current = true;
       stopRequestedDuringStartRef.current = false;
       pushForceStoppedRef.current = false;
+      cueSessionRef.current.begin();
       let recordingStarted = false;
       try {
         if (!audioManagerRef.current) return false;
@@ -267,7 +275,11 @@ export const useAudioRecording = (toast, options = {}) => {
             window.electronAPI?.pauseMediaPlayback?.();
           }
           window.electronAPI?.registerCancelHotkey?.("Escape");
-          void playStartCue();
+          // A streaming dictation sounds its cue from the first captured frame
+          // (onCaptureAudible), before the provider connection is up. A batch
+          // recording, or a streaming start that fell back to one, has no such
+          // frame, so its cue is the recorder having started.
+          if (!audioManagerRef.current.getState().isStreaming) cueSessionRef.current.startReady();
         }
 
         return didStart;
@@ -543,10 +555,25 @@ export const useAudioRecording = (toast, options = {}) => {
           setPartialTranscript("");
         }
       },
+      onCaptureAudible: () => {
+        // A release that already landed during the start is about to stop this
+        // recording; a start chirp now would only trail the stop cue.
+        if (stopRequestedDuringStartRef.current) return;
+        cueSessionRef.current.startReady();
+      },
+      onStreamWarning: (warning) => {
+        cueSessionRef.current.fail();
+        toast({
+          title: getRecordingErrorTitle(warning, t),
+          description: getRecordingErrorDescription(warning, t),
+          variant: "default",
+        });
+      },
       onError: (error) => {
         setIsPreparing(false);
         setIsStopping(false);
         if (error?.code === "TRANSCRIPTION_CANCELLED" || error?.code === "REASON_CANCELLED") return;
+        if (isStreamingConnectionError(error?.code)) cueSessionRef.current.fail();
         onDemoEventRef.current?.({
           kind: demoKindRef.current,
           status: "error",

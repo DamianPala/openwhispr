@@ -904,17 +904,6 @@
       "removeFillers": {
         "label": "移除填充词",
         "description": "在粘贴文本前移除 \"um\"、\"uh\"、\"yyy\" 等填充词。"
-      },
-      "keepAlive": {
-        "label": "保持连接",
-        "description": "在两次录音之间保持连接，下一次录音可立即开始。空闲时间也按流式传输计费。",
-        "options": {
-          "0": "关闭",
-          "30": "30 秒（费用 +50–100%）",
-          "60": "1 分钟（费用 +100–150%）",
-          "120": "2 分钟（费用 +100–200%）",
-          "300": "5 分钟（费用 +200–300%）"
-        }
       }
     },
     "tinfoil": {
@@ -951,6 +940,20 @@
       "micRestored": {
         "title": "麦克风已恢复",
         "description": "音频采集已恢复。"
+      },
+      "streamingConnection": {
+        "failed": {
+          "title": "连接失败",
+          "description": "无法连接到转录服务，本次听写未被转录。请检查网络连接后重试。"
+        },
+        "lost": {
+          "title": "连接已断开",
+          "description": "与转录服务的连接已断开。已转录的文字会保留，但本次听写可能不完整。"
+        },
+        "audioDropped": {
+          "title": "听写可能不完整",
+          "description": "连接建立耗时过长，本次听写的一部分已被丢弃。"
+        }
       },
       "partialTranscription": {
         "title": "部分转录",

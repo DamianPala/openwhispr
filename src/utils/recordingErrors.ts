@@ -1,5 +1,10 @@
 import { TFunction } from "i18next";
 import { describeProviderError } from "./describeProviderError";
+import {
+  STREAMING_AUDIO_DROPPED,
+  STREAMING_CONNECTION_FAILED,
+  STREAMING_CONNECTION_LOST,
+} from "../helpers/streamingConnectionErrors.js";
 
 type RecordingError = {
   code?: string;
@@ -19,6 +24,15 @@ export function getRecordingErrorTitle(error: RecordingError, t: TFunction): str
   if (error.code === "PASTE_FAILED") return t("hooks.audioRecording.pasteFailed.title");
   if (error.code?.startsWith("SELECTION_EDIT_")) {
     return t("hooks.audioRecording.selectionEditing.notAppliedTitle");
+  }
+  if (error.code === STREAMING_CONNECTION_FAILED) {
+    return t("hooks.audioRecording.streamingConnection.failed.title");
+  }
+  if (error.code === STREAMING_CONNECTION_LOST) {
+    return t("hooks.audioRecording.streamingConnection.lost.title");
+  }
+  if (error.code === STREAMING_AUDIO_DROPPED) {
+    return t("hooks.audioRecording.streamingConnection.audioDropped.title");
   }
   if (error.code === "NETWORK_ERROR") return t(error.title);
   if (error.code === "AUTH_EXPIRED" || error.code === "AUTH_REQUIRED") {

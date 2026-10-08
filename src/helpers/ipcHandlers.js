@@ -11497,8 +11497,8 @@ class IPCHandlers {
     let sonioxStreamingStartInProgress = false;
     let sonioxSendDropCount = 0;
 
-    // Re-bound on every warmup/start so a warm socket promoted by a different
-    // window can never emit into the window that opened it.
+    // Re-bound on every start so callbacks never emit into a window that is no
+    // longer the one dictating.
     const ensureSonioxStreaming = (event) => {
       if (!this.sonioxStreaming) {
         this.sonioxStreaming = new SonioxStreaming();
@@ -11511,37 +11511,15 @@ class IPCHandlers {
       streaming.onPartialTranscript = (text) => emit("soniox-partial-transcript", text);
       streaming.onFinalTranscript = (text) => emit("soniox-final-transcript", text);
       streaming.onError = (error) => emit("soniox-error", error.message);
+      streaming.onConnectionLost = (error) =>
+        emit("soniox-stream-issue", { kind: "connection_lost", message: error.message });
+      streaming.onAudioDropped = () => emit("soniox-stream-issue", { kind: "audio_dropped" });
       streaming.onSessionEnd = (data) => emit("soniox-session-end", data);
       streaming.onFinalized = () => emit("soniox-finalized");
       return streaming;
     };
 
     const SONIOX_TOKEN_OPTIONS = { mode: "byok", provider: "soniox-realtime" };
-
-    ipcMain.handle("soniox-streaming-warmup", async (event, options = {}) => {
-      try {
-        // keepAliveTimeout 0 = user opted out of paid idle sockets (settingsStore.ts).
-        if (!(options.keepAliveTimeout > 0)) return { success: true };
-        const streaming = ensureSonioxStreaming(event);
-        dropStaleReadyWarmConnection(streaming);
-        if (streaming.hasWarmConnection() || streaming.isConnected) {
-          return { success: true, alreadyWarm: true };
-        }
-        // Read before the key is, so a save during the read marks this socket stale.
-        const generation = credentialGeneration;
-        const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
-        await streaming.warmup({
-          ...options,
-          apiKey,
-          idleTimeoutMs: options.keepAliveTimeout * 1000,
-          credentialGeneration: generation,
-        });
-        return { success: true };
-      } catch (error) {
-        debugLogger.error("Soniox warmup error", { error: error.message });
-        return toPolicyFailure(error);
-      }
-    });
 
     ipcMain.handle("soniox-streaming-start", async (event, options = {}) => {
       if (sonioxStreamingStartInProgress) {
@@ -11553,15 +11531,10 @@ class IPCHandlers {
         const streaming = ensureSonioxStreaming(event);
         if (streaming.isConnected) await streaming.disconnect(false);
         const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
-        dropStaleWarmConnection(streaming);
-        const { promoted } = await streaming.connect({ ...options, apiKey });
+        await streaming.connect({ ...options, apiKey });
         sonioxSendDropCount = 0;
-        debugLogger.debug(
-          "Soniox streaming started",
-          { usedWarmConnection: promoted },
-          "streaming"
-        );
-        return { success: true, usedWarmConnection: promoted };
+        debugLogger.debug("Soniox streaming started", {}, "streaming");
+        return { success: true };
       } catch (error) {
         debugLogger.error("Soniox streaming start error", { error: error.message });
         return streamingStartFailure(error);
@@ -11613,8 +11586,6 @@ class IPCHandlers {
       try {
         const model = this.sonioxStreaming?.currentModel || SONIOX_DEFAULT_MODEL;
         const audioBytesSent = this.sonioxStreaming?.audioBytesSent || 0;
-        // Not cleared to null: a warm connection (sonioxKeepAliveTimeout > 0)
-        // must survive the recording that just ended.
         const result = this.sonioxStreaming
           ? await this.sonioxStreaming.disconnect(true)
           : { text: "" };

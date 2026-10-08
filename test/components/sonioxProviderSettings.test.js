@@ -252,16 +252,3 @@ test("closing the extra-language picker returns focus to the Add button", async 
     await React.act(async () => root.unmount());
   }
 });
-
-test("keep-alive description stays a one-liner under 110 chars and keeps the option cost figures", () => {
-  const en = require("../../src/locales/en/translation.json");
-  const description = en.transcription.soniox.keepAlive.description;
-  assert.equal(description.includes("\n"), false);
-  assert.ok(description.length <= 110, `expected <=110 chars, got ${description.length}`);
-
-  const options = en.transcription.soniox.keepAlive.options;
-  assert.match(options["30"], /%/);
-  assert.match(options["60"], /%/);
-  assert.match(options["120"], /%/);
-  assert.match(options["300"], /%/);
-});

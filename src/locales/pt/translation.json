@@ -883,17 +883,6 @@
       "removeFillers": {
         "label": "Remover palavras de preenchimento",
         "description": "Remove \"um\", \"uh\", \"yyy\" antes de o texto ser colado."
-      },
-      "keepAlive": {
-        "label": "Manter conexão",
-        "description": "Mantém a conexão aberta entre gravações para que a próxima comece na hora. A Soniox cobra o tempo ocioso como streaming.",
-        "options": {
-          "0": "Desativado",
-          "30": "30 segundos (+50–100% de custo)",
-          "60": "1 minuto (+100–150% de custo)",
-          "120": "2 minutos (+100–200% de custo)",
-          "300": "5 minutos (+200–300% de custo)"
-        }
       }
     },
     "tinfoil": {
@@ -930,6 +919,20 @@
       "micRestored": {
         "title": "Microfone restaurado",
         "description": "A captura de áudio foi retomada."
+      },
+      "streamingConnection": {
+        "failed": {
+          "title": "Falha na conexão",
+          "description": "Não foi possível conectar ao serviço de transcrição, então este ditado não foi transcrito. Verifique sua conexão e tente novamente."
+        },
+        "lost": {
+          "title": "Conexão perdida",
+          "description": "A conexão com o serviço de transcrição caiu. O texto transcrito até agora foi mantido, mas o ditado pode estar incompleto."
+        },
+        "audioDropped": {
+          "title": "O ditado pode estar incompleto",
+          "description": "A conexão demorou demais para abrir, então parte deste ditado foi descartada."
+        }
       },
       "partialTranscription": {
         "title": "Transcrição parcial",

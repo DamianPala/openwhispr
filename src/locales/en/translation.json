@@ -904,17 +904,6 @@
       "removeFillers": {
         "label": "Remove Filler Words",
         "description": "Drops \"um\", \"uh\", \"yyy\" before the text is pasted."
-      },
-      "keepAlive": {
-        "label": "Keep-Alive",
-        "description": "Keeps the connection open so the next recording starts right away. Soniox bills the idle time as streaming.",
-        "options": {
-          "0": "Off",
-          "30": "30 seconds (+50–100% cost)",
-          "60": "1 minute (+100–150% cost)",
-          "120": "2 minutes (+100–200% cost)",
-          "300": "5 minutes (+200–300% cost)"
-        }
       }
     },
     "tinfoil": {
@@ -951,6 +940,20 @@
       "micRestored": {
         "title": "Microphone restored",
         "description": "Audio capture has resumed."
+      },
+      "streamingConnection": {
+        "failed": {
+          "title": "Connection failed",
+          "description": "Couldn't connect to the transcription service, so this dictation wasn't transcribed. Check your connection and try again."
+        },
+        "lost": {
+          "title": "Connection lost",
+          "description": "The connection to the transcription service dropped. Text transcribed so far is kept, but the dictation may be incomplete."
+        },
+        "audioDropped": {
+          "title": "Dictation may be incomplete",
+          "description": "The connection took too long to open, so part of this dictation was dropped."
+        }
       },
       "partialTranscription": {
         "title": "Partial Transcription",

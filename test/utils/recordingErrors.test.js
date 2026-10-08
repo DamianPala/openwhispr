@@ -15,7 +15,10 @@ test("a classified provider failure gets the surface title and translated descri
     messageParams: { provider: "Mistral" },
   };
   assert.equal(getRecordingErrorTitle(report, t), "providerErrors.titles.transcription");
-  assert.equal(getRecordingErrorDescription(report, t), 'providerErrors.authFailed|{"provider":"Mistral"}');
+  assert.equal(
+    getRecordingErrorDescription(report, t),
+    'providerErrors.authFailed|{"provider":"Mistral"}'
+  );
 });
 
 test("the rate-limit title is unchanged", async () => {
@@ -31,4 +34,28 @@ test("unclassified reports keep their own title and description", async () => {
   const report = { title: "Transcription Error", description: "Transcription failed: boom" };
   assert.equal(getRecordingErrorTitle(report, t), "Transcription Error");
   assert.equal(getRecordingErrorDescription(report, t), "Transcription failed: boom");
+});
+
+test("each streaming connection failure reads as what happened, not as the raw socket error", async () => {
+  const { getRecordingErrorTitle, getRecordingErrorDescription } = await load();
+  for (const [code, key] of [
+    ["STREAMING_CONNECTION_FAILED", "failed"],
+    ["STREAMING_CONNECTION_LOST", "lost"],
+    ["STREAMING_AUDIO_DROPPED", "audioDropped"],
+  ]) {
+    const report = {
+      code,
+      title: "Streaming Error",
+      description: "Connection lost (code: 1006)",
+      messageKey: `hooks.audioRecording.streamingConnection.${key}.description`,
+    };
+    assert.equal(
+      getRecordingErrorTitle(report, t),
+      `hooks.audioRecording.streamingConnection.${key}.title`
+    );
+    assert.equal(
+      getRecordingErrorDescription(report, t),
+      `hooks.audioRecording.streamingConnection.${key}.description`
+    );
+  }
 });

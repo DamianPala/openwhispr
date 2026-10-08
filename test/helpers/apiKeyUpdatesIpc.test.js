@@ -77,7 +77,7 @@ class FakeStreaming {
   }
   async warmup(options) {
     if (this.warmToken !== null) return;
-    this.warmToken = options.token ?? options.apiKey;
+    this.warmToken = options.token;
     this.warmConnectionOptions = options;
   }
   async connect({ token, apiKey }) {
@@ -85,7 +85,6 @@ class FakeStreaming {
     this.token = this.warmToken || token || apiKey;
     this.warmToken = null;
     this.isConnected = true;
-    return { promoted: this.rodeWarm };
   }
   async disconnect() {
     this.disconnects += 1;
@@ -103,7 +102,6 @@ const streamingModules = [
   "./assemblyAiStreaming",
   "./deepgramStreaming",
   "./cortiStreaming",
-  "./sonioxStreaming",
   "./openaiRealtimeStreaming",
 ];
 const originalLoad = Module._load;
@@ -178,7 +176,6 @@ const target = {
   assemblyAiStreaming: null,
   deepgramStreaming: null,
   cortiStreaming: null,
-  sonioxStreaming: null,
   geminiStreaming: null,
   _dictationStreaming: null,
   _dictationConnectPromise: null,
@@ -241,24 +238,17 @@ const STREAMING = [
   ["assemblyai", "assemblyAiStreaming", "save-assemblyai-key", (key) => `token-${key}`],
   ["deepgram", "deepgramStreaming", "save-deepgram-key", (key) => key],
   ["corti", "cortiStreaming", "save-corti-client-secret", (key) => `token-${key}`],
-  ["soniox", "sonioxStreaming", "save-soniox-key", (key) => key],
   ["gemini", "geminiStreaming", "save-gemini-key", (key) => key],
 ];
 
-// Soniox only warms a socket when the user asked for keep-alive.
-const byokOptions = (provider) =>
-  provider === "soniox" ? { mode: "byok", keepAliveTimeout: 60 } : { mode: "byok" };
-
 for (const [provider, property, saveChannel, tokenFor] of STREAMING) {
-  const byok = byokOptions(provider);
-
   test(`${provider}: a BYOK start rides the socket its warmup opened`, async () => {
     target[property] = null;
     invoke(saveChannel, "A");
-    assert.deepEqual(await invoke(`${provider}-streaming-warmup`, byok), {
+    assert.deepEqual(await invoke(`${provider}-streaming-warmup`, { mode: "byok" }), {
       success: true,
     });
-    const result = await invoke(`${provider}-streaming-start`, byok);
+    const result = await invoke(`${provider}-streaming-start`, { mode: "byok" });
     assert.equal(result.success, true);
     assert.equal(rodeWarm(provider, property, result), true);
     assert.equal(target[property].token, tokenFor("A"));
@@ -267,9 +257,9 @@ for (const [provider, property, saveChannel, tokenFor] of STREAMING) {
   test(`${provider}: a key saved after the warmup reaches the next start`, async () => {
     target[property] = null;
     invoke(saveChannel, "A");
-    await invoke(`${provider}-streaming-warmup`, byok);
+    await invoke(`${provider}-streaming-warmup`, { mode: "byok" });
     invoke(saveChannel, "B");
-    const result = await invoke(`${provider}-streaming-start`, byok);
+    const result = await invoke(`${provider}-streaming-start`, { mode: "byok" });
     assert.equal(result.success, true);
     assert.equal(rodeWarm(provider, property, result), false);
     assert.equal(target[property].token, tokenFor("B"));
@@ -278,10 +268,10 @@ for (const [provider, property, saveChannel, tokenFor] of STREAMING) {
   test(`${provider}: a warmup after a key save does not vouch for the socket it finds`, async () => {
     target[property] = null;
     invoke(saveChannel, "A");
-    await invoke(`${provider}-streaming-warmup`, byok);
+    await invoke(`${provider}-streaming-warmup`, { mode: "byok" });
     invoke(saveChannel, "B");
-    const warmup = await invoke(`${provider}-streaming-warmup`, byok);
-    const result = await invoke(`${provider}-streaming-start`, byok);
+    const warmup = await invoke(`${provider}-streaming-warmup`, { mode: "byok" });
+    const result = await invoke(`${provider}-streaming-start`, { mode: "byok" });
     assert.equal(target[property].token, tokenFor("B"));
     // Gemini's warm connection is also its live one, so only a start replaces it.
     if (provider === "gemini") {
@@ -296,9 +286,9 @@ for (const [provider, property, saveChannel, tokenFor] of STREAMING) {
   test(`${provider}: re-saving the unchanged key keeps the warm socket`, async () => {
     target[property] = null;
     invoke(saveChannel, "A");
-    await invoke(`${provider}-streaming-warmup`, byok);
+    await invoke(`${provider}-streaming-warmup`, { mode: "byok" });
     invoke(saveChannel, "A");
-    const result = await invoke(`${provider}-streaming-start`, byok);
+    const result = await invoke(`${provider}-streaming-start`, { mode: "byok" });
     assert.equal(rodeWarm(provider, property, result), true);
     assert.equal(target[property].token, tokenFor("A"));
   });
@@ -306,8 +296,8 @@ for (const [provider, property, saveChannel, tokenFor] of STREAMING) {
   test(`${provider}: a key saved mid-session leaves the live session alone`, async () => {
     target[property] = null;
     invoke(saveChannel, "A");
-    await invoke(`${provider}-streaming-warmup`, byok);
-    await invoke(`${provider}-streaming-start`, byok);
+    await invoke(`${provider}-streaming-warmup`, { mode: "byok" });
+    await invoke(`${provider}-streaming-start`, { mode: "byok" });
     const live = target[property];
     invoke(saveChannel, "B");
     assert.equal(target[property], live);
@@ -316,10 +306,7 @@ for (const [provider, property, saveChannel, tokenFor] of STREAMING) {
   });
 }
 
-// Corti and Soniox have no managed tier.
-for (const [provider, property, saveChannel] of STREAMING.filter(
-  ([name]) => !["corti", "soniox"].includes(name)
-)) {
+for (const [provider, property, saveChannel] of STREAMING.filter(([name]) => name !== "corti")) {
   test(`${provider}: a key save leaves a managed warm socket in place`, async (t) => {
     withManagedApi(t);
     target[property] = null;

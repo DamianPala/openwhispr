@@ -1,6 +1,7 @@
 const WebSocket = require("ws");
 const debugLogger = require("./debugLogger");
 const { isPrivateHost } = require("./providerConnectionTest");
+const { STREAMING_CONNECTION_FAILED } = require("./streamingConnectionErrors");
 
 const WEBSOCKET_TIMEOUT_MS = 15000;
 const DISCONNECT_TIMEOUT_MS = 3000;
@@ -51,20 +52,12 @@ function buildConfigMessage({ apiKey, model, language, extraLanguages, keyterms,
   return config;
 }
 
-// Everything a warm socket is configured with, folded the way buildConfigMessage
-// folds it, so a warm connection can be compared against the session that wants
-// to ride it. The dictionary and sample rate can change between warmup and start,
-// just like language on Deepgram — see deepgramStreaming.js's urlIdentity.
-const warmIdentity = (options) =>
-  JSON.stringify([
-    resolveModel(options.model),
-    options.language || null,
-    options.extraLanguages || [],
-    options.sampleRate || 16000,
-    resolveRegion(options.region),
-    (options.keyterms || []).filter(Boolean),
-    options.removeFillers !== false,
-  ]);
+// A handshake that ends without an open socket (error, close before open,
+// timeout) is tagged so the renderer can tell "the connection never came up"
+// from a token, policy or key failure and sound the error cue.
+function connectionFailure(message, cause) {
+  return Object.assign(new Error(message), { code: STREAMING_CONNECTION_FAILED, cause });
+}
 
 // Best-effort hostname for logging: buildWebSocketUrl only ever returns a
 // value it already parsed with new URL(), so this should never throw, but a
@@ -206,7 +199,9 @@ class SonioxStreaming {
     this.onSessionEnd = null;
     this.onFinalized = null;
     this.onConnectionLost = null;
+    this.onAudioDropped = null;
     this.connectionLossNotified = false;
+    this.audioDropNotified = false;
     this.pendingResolve = null;
     this.pendingReject = null;
     this.connectionTimeout = null;
@@ -222,14 +217,6 @@ class SonioxStreaming {
     this._lastAudioSentAt = 0;
     this._connecting = false;
     this._connectPromise = null;
-
-    // Warm connection state
-    this.warmConnection = null;
-    this.warmConnectionReady = false;
-    this.warmConnectionOptions = null;
-    this.warmKeepAliveInterval = null;
-    this.warmIdleTimeout = null;
-    this._warmPendingReject = null;
   }
 
   getFullTranscript() {
@@ -283,6 +270,15 @@ class SonioxStreaming {
     }
   }
 
+  // The cold-start buffer is full: the handshake is taking longer than the
+  // buffer holds, so the opening of the dictation is being thrown away. Once
+  // per session, however many frames follow.
+  notifyAudioDropped() {
+    if (this.audioDropNotified) return;
+    this.audioDropNotified = true;
+    this.onAudioDropped?.();
+  }
+
   async connect(options = {}) {
     const { apiKey, mode } = options;
     if (mode !== "byok") {
@@ -292,7 +288,7 @@ class SonioxStreaming {
 
     if (this.isConnected) {
       debugLogger.debug("Soniox already connected");
-      return { promoted: false };
+      return;
     }
 
     // A second caller while a handshake is in flight joins it instead of
@@ -302,6 +298,7 @@ class SonioxStreaming {
 
     this._connecting = true;
     this.connectionLossNotified = false;
+    this.audioDropNotified = false;
     this._finalized = false;
     this._connectPromise = this._doConnect(options).finally(() => {
       this._connecting = false;
@@ -311,32 +308,12 @@ class SonioxStreaming {
   }
 
   async _doConnect(options) {
-    // Computed before the warm/cold branch so a session promoted onto a warm
-    // socket reports the model actually sent (warmIdentity guarantees it
-    // matches the model buildConfigMessage would resolve for a cold start).
     const configMessage = buildConfigMessage(options);
     this.currentModel = configMessage.model;
     this.removeFillersEnabled = options.removeFillers !== false;
 
-    // Try to use pre-warmed connection for instant start
-    if (this.hasWarmConnection()) {
-      const identityMatch =
-        this.warmConnectionOptions &&
-        warmIdentity(this.warmConnectionOptions) === warmIdentity(options);
-      if (identityMatch && this.useWarmConnection()) {
-        debugLogger.debug("Soniox using warm connection - instant start");
-        // Frames sent while this promotion was still in flight (ws was null)
-        // were buffered by sendAudio; the promoted socket is open now, so
-        // flush them the same way the cold path does after its own "open".
-        this.flushColdStartBuffer();
-        return { promoted: true };
-      }
-      this.cleanupWarmConnection();
-    }
-
-    // coldStartBuffer is kept: frames sent before this call, buffered against
-    // a warm socket whose identity turned out not to match, still belong to
-    // this session and go out after the config message.
+    // coldStartBuffer is kept: frames the renderer sent before this call
+    // belong to this session and go out after the config message.
     this.finalTokens = [];
     this.currentNonFinalText = "";
     this.audioBytesSent = 0;
@@ -361,7 +338,9 @@ class SonioxStreaming {
         try {
           ws = new WebSocket(wsUrl);
         } catch (err) {
-          this._settlePending(err);
+          this._settlePending(
+            connectionFailure(`Soniox WebSocket failed to start: ${err.message}`, err)
+          );
           return;
         }
         this.ws = ws;
@@ -369,7 +348,7 @@ class SonioxStreaming {
         // Armed only once the socket exists, so a constructor throw can
         // never leave this timer running with nothing to time out.
         this.connectionTimeout = setTimeout(() => {
-          this._settlePending(new Error("Soniox WebSocket connection timeout"));
+          this._settlePending(connectionFailure("Soniox WebSocket connection timeout"));
           this.cleanup();
         }, WEBSOCKET_TIMEOUT_MS);
 
@@ -397,8 +376,6 @@ class SonioxStreaming {
       clearTimeout(this.connectionTimeout);
       this.connectionTimeout = null;
     }
-
-    return { promoted: false };
   }
 
   handleMessage(data) {
@@ -410,6 +387,9 @@ class SonioxStreaming {
           code: res.error_code,
           message: res.error_message,
         });
+        // Soniox closes the socket right after an error frame; that close is
+        // this same failure, not a second lost connection.
+        this.connectionLossNotified = true;
         this.onError?.(new Error(`Soniox error ${res.error_code}: ${res.error_message}`));
         return;
       }
@@ -476,12 +456,17 @@ class SonioxStreaming {
     this.ws.on("error", (error) => {
       if (isStale()) return;
       const wasActive = this.isConnected;
+      // A handshake in flight reports this error through the rejected
+      // connect(); a second report here would show the user two failures.
+      const handshakePending = Boolean(this.pendingReject);
       debugLogger.error("Soniox WebSocket error", { error: error.message });
-      this._settlePending(error);
+      this._settlePending(
+        connectionFailure(`Soniox WebSocket connection failed: ${error.message}`, error)
+      );
       this.cleanup();
       if (wasActive && !this.isDisconnecting) {
         this.notifyConnectionLost(error);
-      } else if (!this.isDisconnecting) {
+      } else if (!handshakePending && !this.isDisconnecting) {
         this.onError?.(error);
       }
     });
@@ -494,7 +479,7 @@ class SonioxStreaming {
         reason: reason?.toString(),
         wasActive,
       });
-      this._settlePending(new Error(`WebSocket closed before ready (code: ${code})`));
+      this._settlePending(connectionFailure(`WebSocket closed before ready (code: ${code})`));
       this.cleanup();
       if (wasActive && !this.isDisconnecting) {
         this.onSessionEnd?.({ text: this.getFullTranscript() });
@@ -531,16 +516,16 @@ class SonioxStreaming {
     }
 
     // The renderer starts sending before the start IPC lands, so frames arrive
-    // while connect() is still pending, the cold socket is mid-handshake, or a
-    // warm socket is waiting to be promoted. Buffering them (flushed on open or
-    // right after promotion) is not a drop.
+    // while connect() is pending or the socket is mid-handshake. Buffering them
+    // (flushed on open) is not a drop, until the buffer is full.
     const connectionImminent =
-      this._connecting ||
-      (this.ws && this.ws.readyState === WebSocket.CONNECTING) ||
-      this.hasWarmConnection();
+      this._connecting || (this.ws && this.ws.readyState === WebSocket.CONNECTING);
 
     if (connectionImminent) {
-      if (this.coldStartBufferSize >= COLD_START_BUFFER_MAX) return false;
+      if (this.coldStartBufferSize >= COLD_START_BUFFER_MAX) {
+        this.notifyAudioDropped();
+        return false;
+      }
       const copy = Buffer.from(pcmBuffer);
       this.coldStartBuffer.push(copy);
       this.coldStartBufferSize += copy.length;
@@ -603,8 +588,7 @@ class SonioxStreaming {
 
     if (!this.ws) {
       // The session already ended on its own (server close, error, idle) and
-      // the renderer kept sending until it noticed; with a warm socket sitting
-      // ready those frames were buffered and belong to no session.
+      // the renderer kept sending until it noticed.
       this.coldStartBuffer = [];
       this.coldStartBufferSize = 0;
       return { text: this.getFullTranscript() };
@@ -668,21 +652,18 @@ class SonioxStreaming {
     });
   }
 
-  // Only tears down the active socket. The warm connection is a separate,
-  // independently-lived resource (see cleanupAll) so a recording's cleanup
-  // never cuts short a keep-alive the user asked for (sonioxKeepAliveTimeout).
   cleanup() {
     this.stopKeepAlive();
     clearTimeout(this.connectionTimeout);
     this.connectionTimeout = null;
-    // So frames buffered for this session (mid-handshake, or while a warm
-    // socket sat ready) can never bleed into the next one.
+    // So frames buffered for this session (mid-handshake) can never bleed
+    // into the next one.
     this.coldStartBuffer = [];
     this.coldStartBufferSize = 0;
     // A no-op once a handler above has already settled the in-flight
     // connect() with a specific reason; the safety net for every other path
     // that can tear the socket down mid-handshake (disconnect() while
-    // CONNECTING, cleanupAll() at quit).
+    // CONNECTING).
     this._settlePending(new Error("Soniox connection closed"));
 
     if (this.ws) {
@@ -697,209 +678,8 @@ class SonioxStreaming {
     this.isConnected = false;
   }
 
-  cleanupAll() {
-    this.cleanup();
-    this.cleanupWarmConnection();
-  }
-
-  // --- Warm connection (keep-alive between recordings) ---
-
-  async warmup(options = {}) {
-    const { apiKey, idleTimeoutMs } = options;
-    if (!apiKey) throw new Error("Soniox API key is required for warmup");
-
-    if (this.warmConnection) {
-      debugLogger.debug(
-        this.warmConnectionReady
-          ? "Soniox connection already warm"
-          : "Soniox warmup already in progress, skipping"
-      );
-      return;
-    }
-
-    this.warmConnectionReady = false;
-    this.warmConnectionOptions = { ...options };
-
-    const configMessage = buildConfigMessage(options);
-    const wsUrl = this.buildWebSocketUrl(options);
-
-    debugLogger.debug("Soniox warming up connection", {
-      model: configMessage.model,
-      languageHints: configMessage.language_hints,
-      idleTimeoutMs,
-    });
-
-    return new Promise((resolve, reject) => {
-      this._warmPendingReject = reject;
-
-      const warmupTimeout = setTimeout(() => {
-        this._settleWarmPending(new Error("Soniox warmup connection timeout"));
-        this.cleanupWarmConnection();
-      }, WEBSOCKET_TIMEOUT_MS);
-
-      const warm = new WebSocket(wsUrl);
-      this.warmConnection = warm;
-      // Same stale-socket rule as attachSessionHandlers: once this warm socket
-      // has been promoted or discarded, its late close/error must not touch
-      // whatever warm socket replaced it.
-      const isStale = () => this.warmConnection !== warm;
-
-      this.warmConnection.on("open", () => {
-        debugLogger.debug("Soniox warm connection opened, sending config");
-        this.warmConnection.send(JSON.stringify(configMessage));
-        clearTimeout(warmupTimeout);
-        this._warmPendingReject = null;
-        this.warmConnectionReady = true;
-        this.startWarmKeepAlive(idleTimeoutMs);
-        debugLogger.debug("Soniox connection warmed up");
-        resolve();
-      });
-
-      this.warmConnection.on("message", () => {
-        // Discard messages on warm connection (no audio sent yet)
-      });
-
-      this.warmConnection.on("error", (error) => {
-        if (isStale()) return;
-        clearTimeout(warmupTimeout);
-        debugLogger.error("Soniox warmup connection error", { error: error.message });
-        this._settleWarmPending(error);
-        this.cleanupWarmConnection();
-      });
-
-      this.warmConnection.on("close", (code, reason) => {
-        if (isStale()) return;
-        clearTimeout(warmupTimeout);
-        const wasReady = this.warmConnectionReady;
-        debugLogger.debug("Soniox warm connection closed", {
-          wasReady,
-          code,
-          reason: reason?.toString(),
-        });
-        if (!wasReady) {
-          this._settleWarmPending(new Error(`Soniox warmup closed before ready (code: ${code})`));
-        }
-        this.cleanupWarmConnection();
-      });
-    });
-  }
-
-  useWarmConnection() {
-    if (!this.warmConnection || !this.warmConnectionReady) {
-      return false;
-    }
-
-    if (this.warmConnection.readyState !== WebSocket.OPEN) {
-      debugLogger.debug("Soniox warm connection readyState not OPEN, discarding", {
-        readyState: this.warmConnection.readyState,
-      });
-      this.cleanupWarmConnection();
-      return false;
-    }
-
-    this.stopWarmKeepAlive();
-
-    this.ws = this.warmConnection;
-    this.isConnected = true;
-    this.connectionLossNotified = false;
-    this._finalized = false;
-    this.warmConnection = null;
-    this.warmConnectionReady = false;
-
-    this.attachSessionHandlers();
-
-    // Reset session state for fresh dictation. Not the cold-start buffer: it
-    // may hold frames sendAudio queued while this warm socket sat ready
-    // (identity known, connect() not yet called) — connect() flushes those
-    // right after this call returns, the same way the cold path flushes on
-    // "open". cleanup() clears it at the end of every session, so nothing
-    // from an earlier dictation can survive into this one.
-    this.finalTokens = [];
-    this.currentNonFinalText = "";
-    this.audioBytesSent = 0;
-    this._finalizeSent = false;
-
-    this.startKeepAlive();
-
-    debugLogger.debug("Soniox using pre-warmed connection");
-    return true;
-  }
-
-  startWarmKeepAlive(idleTimeoutMs) {
-    this.stopWarmKeepAlive();
-
-    if (idleTimeoutMs > 0) {
-      this.warmIdleTimeout = setTimeout(() => {
-        debugLogger.debug("Soniox warm connection idle timeout, closing");
-        this.cleanupWarmConnection();
-      }, idleTimeoutMs);
-    }
-
-    this.warmKeepAliveInterval = setInterval(() => {
-      if (!this.warmConnection || this.warmConnection.readyState !== WebSocket.OPEN) {
-        this.stopWarmKeepAlive();
-        return;
-      }
-      try {
-        this.warmConnection.send(JSON.stringify({ type: "keepalive" }));
-      } catch (err) {
-        debugLogger.debug("Soniox warm keep-alive failed", { error: err.message });
-        this.cleanupWarmConnection();
-      }
-    }, KEEPALIVE_INTERVAL_MS);
-  }
-
-  stopWarmKeepAlive() {
-    if (this.warmKeepAliveInterval) {
-      clearInterval(this.warmKeepAliveInterval);
-      this.warmKeepAliveInterval = null;
-    }
-    if (this.warmIdleTimeout) {
-      clearTimeout(this.warmIdleTimeout);
-      this.warmIdleTimeout = null;
-    }
-  }
-
-  // Rejects an in-flight warmup() (if any). Used by cleanupWarmConnection()
-  // itself as a safety net (a disconnect/cleanupAll racing the handshake) and,
-  // first, by warmup()'s own error/close/timeout paths so the specific reason
-  // reaches the caller before the generic one below would.
-  _settleWarmPending(error) {
-    if (this._warmPendingReject) {
-      this._warmPendingReject(error);
-    }
-    this._warmPendingReject = null;
-  }
-
-  cleanupWarmConnection() {
-    this.stopWarmKeepAlive();
-    this._settleWarmPending(new Error("Soniox warmup cancelled"));
-    if (this.warmConnection) {
-      try {
-        this.warmConnection.close();
-      } catch (err) {
-        // ignore
-      }
-      this.warmConnection = null;
-    }
-    this.warmConnectionReady = false;
-    this.warmConnectionOptions = null;
-  }
-
-  hasWarmConnection() {
-    return (
-      this.warmConnection !== null &&
-      this.warmConnectionReady &&
-      this.warmConnection.readyState === WebSocket.OPEN
-    );
-  }
-
   getStatus() {
-    return {
-      isConnected: this.isConnected,
-      sessionId: null,
-      hasWarmConnection: this.hasWarmConnection(),
-    };
+    return { isConnected: this.isConnected, sessionId: null };
   }
 }
 

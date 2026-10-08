@@ -871,7 +871,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   ),
 
   // Soniox Streaming
-  sonioxStreamingWarmup: (options) => ipcRenderer.invoke("soniox-streaming-warmup", options),
   sonioxStreamingStart: (options) => ipcRenderer.invoke("soniox-streaming-start", options),
   sonioxStreamingSend: (audioBuffer) => ipcRenderer.send("soniox-streaming-send", audioBuffer),
   sonioxStreamingFinalize: () => ipcRenderer.send("soniox-streaming-finalize"),
@@ -886,6 +885,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     (callback) => (_event, text) => callback(text)
   ),
   onSonioxError: registerListener("soniox-error", (callback) => (_event, error) => callback(error)),
+  onSonioxStreamIssue: registerListener(
+    "soniox-stream-issue",
+    (callback) => (_event, issue) => callback(issue)
+  ),
   onSonioxSessionEnd: registerListener(
     "soniox-session-end",
     (callback) => (_event, data) => callback(data)

@@ -276,7 +276,7 @@ test("options: corti carries environment and tenant; auto language is omitted", 
   assert.equal(options.language, undefined);
 });
 
-test("options: soniox carries region/keepAliveTimeout and extra languages only when a language is resolved", async () => {
+test("options: soniox carries region and extra languages only when a language is resolved", async () => {
   const { buildStreamingSessionOptions } = await loadRouting();
   const sonioxSettings = settingsWith({
     cloudTranscriptionProvider: "soniox",
@@ -284,6 +284,7 @@ test("options: soniox carries region/keepAliveTimeout and extra languages only w
     cloudTranscriptionModel: "stt-rt-v5",
     sonioxExtraLanguages: ["pl", "de"],
     sonioxRegion: "eu",
+    // A value left in localStorage by the removed keep-alive setting.
     sonioxKeepAliveTimeout: 60,
   });
 
@@ -295,7 +296,7 @@ test("options: soniox carries region/keepAliveTimeout and extra languages only w
   });
   assert.deepEqual(withLanguage.extraLanguages, ["pl", "de"]);
   assert.equal(withLanguage.region, "eu");
-  assert.equal(withLanguage.keepAliveTimeout, 60);
+  assert.equal("keepAliveTimeout" in withLanguage, false, "a stale setting is not sent");
   assert.equal(withLanguage.removeFillers, true, "defaults to true when unset");
 
   const withoutLanguage = buildStreamingSessionOptions({
@@ -307,7 +308,6 @@ test("options: soniox carries region/keepAliveTimeout and extra languages only w
   assert.equal(withoutLanguage.language, undefined);
   assert.equal(withoutLanguage.extraLanguages, undefined, "hints are meaningless on auto");
   assert.equal(withoutLanguage.region, "eu");
-  assert.equal(withoutLanguage.keepAliveTimeout, 60);
 
   const mainLanguageEchoedInExtras = buildStreamingSessionOptions({
     providerName: "soniox",
@@ -317,7 +317,6 @@ test("options: soniox carries region/keepAliveTimeout and extra languages only w
       cloudTranscriptionModel: "stt-rt-v5",
       sonioxExtraLanguages: ["en", "pl"],
       sonioxRegion: "us",
-      sonioxKeepAliveTimeout: 0,
     }),
     language: "en",
     keyterms: [],

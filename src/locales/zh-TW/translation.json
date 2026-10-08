@@ -904,17 +904,6 @@
       "removeFillers": {
         "label": "移除贅詞",
         "description": "在貼上文字前移除 \"um\"、\"uh\"、\"yyy\" 等贅詞。"
-      },
-      "keepAlive": {
-        "label": "保持連線",
-        "description": "在兩次錄音之間保持連線，下一次錄音可立即開始。閒置時間也按串流計費。",
-        "options": {
-          "0": "關閉",
-          "30": "30 秒（費用 +50–100%）",
-          "60": "1 分鐘（費用 +100–150%）",
-          "120": "2 分鐘（費用 +100–200%）",
-          "300": "5 分鐘（費用 +200–300%）"
-        }
       }
     },
     "tinfoil": {
@@ -951,6 +940,20 @@
       "micRestored": {
         "title": "麥克風已恢復",
         "description": "音訊擷取已恢復。"
+      },
+      "streamingConnection": {
+        "failed": {
+          "title": "連線失敗",
+          "description": "無法連線到轉錄服務，本次聽寫未被轉錄。請檢查網路連線後再試一次。"
+        },
+        "lost": {
+          "title": "連線已中斷",
+          "description": "與轉錄服務的連線已中斷。已轉錄的文字會保留，但本次聽寫可能不完整。"
+        },
+        "audioDropped": {
+          "title": "聽寫可能不完整",
+          "description": "連線建立耗時過長，本次聽寫的一部分已被捨棄。"
+        }
       },
       "partialTranscription": {
         "title": "部分轉錄",
