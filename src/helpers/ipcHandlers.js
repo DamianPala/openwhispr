@@ -11523,14 +11523,18 @@ class IPCHandlers {
         // keepAliveTimeout 0 = user opted out of paid idle sockets (settingsStore.ts).
         if (!(options.keepAliveTimeout > 0)) return { success: true };
         const streaming = ensureSonioxStreaming(event);
+        dropStaleReadyWarmConnection(streaming);
         if (streaming.hasWarmConnection() || streaming.isConnected) {
           return { success: true, alreadyWarm: true };
         }
+        // Read before the key is, so a save during the read marks this socket stale.
+        const generation = credentialGeneration;
         const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
         await streaming.warmup({
           ...options,
           apiKey,
           idleTimeoutMs: options.keepAliveTimeout * 1000,
+          credentialGeneration: generation,
         });
         return { success: true };
       } catch (error) {
@@ -11549,6 +11553,7 @@ class IPCHandlers {
         const streaming = ensureSonioxStreaming(event);
         if (streaming.isConnected) await streaming.disconnect(false);
         const apiKey = await fetchRealtimeToken(event, SONIOX_TOKEN_OPTIONS);
+        dropStaleWarmConnection(streaming);
         const { promoted } = await streaming.connect({ ...options, apiKey });
         sonioxSendDropCount = 0;
         debugLogger.debug(
