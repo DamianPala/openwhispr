@@ -15,6 +15,8 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <math.h>
+#include <signal.h>
+#include <stdarg.h>
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
@@ -450,13 +452,16 @@ static int init_atspi(void) {
     return status;
 }
 
-static int detect_terminal_atspi(void) {
-    if (init_atspi() != 0) return -1;
+/* 1 / 0 for the active window's application, -1 when no window is active. The
+ * walk does not initialise AT-SPI: the one-shot callers do it per process, the
+ * server once per lifetime. */
+static int detect_terminal_walk(void) {
     AtspiAccessible *desktop = atspi_get_desktop(0);
     if (!desktop) return -1;
 
+    int result = -1;
     int n = atspi_accessible_get_child_count(desktop, NULL);
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n && result < 0; i++) {
         AtspiAccessible *app = atspi_accessible_get_child_at_index(desktop, i, NULL);
         if (!app) continue;
         int nw = atspi_accessible_get_child_count(app, NULL);
@@ -464,21 +469,26 @@ static int detect_terminal_atspi(void) {
             AtspiAccessible *win = atspi_accessible_get_child_at_index(app, j, NULL);
             if (!win) continue;
             AtspiStateSet *states = atspi_accessible_get_state_set(win);
-            gboolean active = atspi_state_set_contains(states, ATSPI_STATE_ACTIVE);
-            g_object_unref(states);
+            gboolean active = states && atspi_state_set_contains(states, ATSPI_STATE_ACTIVE);
+            if (states) g_object_unref(states);
             if (active) {
                 char *name = atspi_accessible_get_name(app, NULL);
-                int result = name ? is_terminal(name) : 0;
+                result = name ? is_terminal(name) : 0;
                 g_free(name);
                 g_object_unref(win);
-                g_object_unref(app);
-                return result;
+                break;
             }
             g_object_unref(win);
         }
         g_object_unref(app);
     }
-    return -1;
+    g_object_unref(desktop);
+    return result;
+}
+
+static int detect_terminal_atspi(void) {
+    if (init_atspi() != 0) return -1;
+    return detect_terminal_walk();
 }
 
 /* Native Wayland compositors do not expose an X11 window id.  AT-SPI gives us
@@ -541,20 +551,28 @@ static int atspi_active_pid(AtspiAccessible *app) {
     return pid > 0 ? pid : 0;
 }
 
-static int print_atspi_target(void) {
-    if (init_atspi() != 0) return 1;
+/* The pid of the application that owns the active window, 0 when there is none. */
+static int atspi_target_pid(void) {
     AtspiAccessible *app = NULL;
     AtspiAccessible *win = find_active_atspi_window(&app);
     int pid = app ? atspi_active_pid(app) : 0;
     if (win) g_object_unref(win);
     if (app) g_object_unref(app);
+    return pid;
+}
+
+static int print_atspi_target(void) {
+    if (init_atspi() != 0) return 1;
+    int pid = atspi_target_pid();
     if (!pid) return 1;
     printf("TARGET ATSPI %d\n", pid);
     return 0;
 }
 
-static int print_atspi_selection(void) {
-    if (init_atspi() != 0) return 1;
+/* The selection answer as the line --atspi-selection prints (without the
+ * newline): ATSPI_SELECTED <pid> <base64> or ATSPI_NONE <pid>. Returns 1 when
+ * the walk found no answer. */
+static int atspi_selection_line(char **line) {
     AtspiAccessible *app = NULL;
     AtspiAccessible *win = find_active_atspi_window(&app);
     int pid = app ? atspi_active_pid(app) : 0;
@@ -569,7 +587,7 @@ static int print_atspi_selection(void) {
         if (terminal) {
             if (win) g_object_unref(win);
             g_object_unref(app);
-            printf("ATSPI_NONE %d\n", pid);
+            *line = g_strdup_printf("ATSPI_NONE %d", pid);
             return 0;
         }
     }
@@ -591,7 +609,7 @@ static int print_atspi_selection(void) {
     if (error || selection_count < 1) {
         if (error) g_error_free(error);
         g_object_unref(text);
-        printf("ATSPI_NONE %d\n", pid);
+        *line = g_strdup_printf("ATSPI_NONE %d", pid);
         return 0;
     }
 
@@ -612,8 +630,151 @@ static int print_atspi_selection(void) {
 
     gchar *encoded = g_base64_encode((const guchar *)selected, strlen(selected));
     g_free(selected);
-    printf("ATSPI_SELECTED %d %s\n", pid, encoded);
+    *line = g_strdup_printf("ATSPI_SELECTED %d %s", pid, encoded);
     g_free(encoded);
+    return 0;
+}
+
+static int print_atspi_selection(void) {
+    if (init_atspi() != 0) return 1;
+    char *line = NULL;
+    if (atspi_selection_line(&line) != 0) return 1;
+    printf("%s\n", line);
+    g_free(line);
+    return 0;
+}
+
+/* --atspi-server: one process answers the target, selection and terminal
+ * questions for the app's whole lifetime. The one-shot modes above open a direct
+ * D-Bus connection to every accessible application and exit; at-spi2-core
+ * before 2.62 never releases such a connection after the peer is gone, so each
+ * short-lived helper leaves a dead pidfd and a main-loop source in every
+ * application it walked (Chrome, Electron, GTK) until that application quits.
+ *
+ * Requests arrive one per line on stdin as "<id> <TARGET|SELECTION|TERMINAL>",
+ * answers go to stdout as "<id> <the line the one-shot mode prints>", or
+ * "<id> UNAVAILABLE" where the one-shot mode exits 1 without output, or
+ * "<id> ERROR <code> <detail>". Every request gets exactly one answer line, so
+ * a caller that gave up on an id can drop its late answer. EOF on stdin ends
+ * the process.
+ *
+ * A one-shot process always read fresh state; this one must not read what
+ * libatspi cached before the user moved to another window. Two things keep the
+ * answers identical to a fresh process:
+ *  - stdin is served from the GLib main loop, so D-Bus traffic (cache updates,
+ *    name-owner changes) is dispatched between requests instead of piling up;
+ *  - before each walk the cache of the whole tree is dropped
+ *    (atspi_accessible_clear_cache marks every known descendant as uncached),
+ *    so ACTIVE/FOCUSED states, names and children are read from the
+ *    applications again. The application connections, which are what must not
+ *    be rebuilt, stay open. libatspi only learns of state changes it
+ *    subscribed to, so a cache that was merely kept up to date by events would
+ *    still be stale after one that was never delivered. */
+#define SERVER_REQUEST_MAX 256
+#define SERVER_ID_MAX 20
+
+static GMainLoop *server_loop;
+static int server_atspi_status;
+
+static void server_reply(const char *id, const char *format, ...) {
+    va_list args;
+    printf("%s ", id);
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+    printf("\n");
+    /* A closed stdout means the parent is gone. */
+    if (fflush(stdout) != 0) g_main_loop_quit(server_loop);
+}
+
+static void server_drop_cache(void) {
+    AtspiAccessible *desktop = atspi_get_desktop(0);
+    if (!desktop) return;
+    atspi_accessible_clear_cache(desktop);
+    g_object_unref(desktop);
+}
+
+static void server_answer(const char *id, const char *command) {
+    if (strcmp(command, "TARGET") != 0 && strcmp(command, "SELECTION") != 0 &&
+        strcmp(command, "TERMINAL") != 0) {
+        server_reply(id, "ERROR unknown-command %s", command);
+        return;
+    }
+    if (server_atspi_status != 0) {
+        server_reply(id, "ERROR atspi-init-failed %d", server_atspi_status);
+        return;
+    }
+    server_drop_cache();
+
+    if (strcmp(command, "TARGET") == 0) {
+        int pid = atspi_target_pid();
+        if (pid) server_reply(id, "TARGET ATSPI %d", pid);
+        else server_reply(id, "UNAVAILABLE");
+    } else if (strcmp(command, "SELECTION") == 0) {
+        char *line = NULL;
+        if (atspi_selection_line(&line) == 0) {
+            server_reply(id, "%s", line);
+            g_free(line);
+        } else {
+            server_reply(id, "UNAVAILABLE");
+        }
+    } else {
+        int terminal = detect_terminal_walk();
+        if (terminal >= 0) server_reply(id, "TERMINAL %d", terminal);
+        else server_reply(id, "TERMINAL UNKNOWN");
+    }
+}
+
+static void server_handle_line(char *line) {
+    line[strcspn(line, "\r\n")] = '\0';
+    char *command = strchr(line, ' ');
+    size_t id_length = command ? (size_t)(command - line) : strlen(line);
+    if (id_length == 0 || id_length > SERVER_ID_MAX || !command ||
+        strspn(line, "0123456789") != id_length) {
+        server_reply("-", "ERROR malformed-request");
+        return;
+    }
+    *command++ = '\0';
+    server_answer(line, command);
+}
+
+static gboolean server_on_stdin(GIOChannel *channel, GIOCondition condition, gpointer data) {
+    for (;;) {
+        gchar *line = NULL;
+        gsize length = 0;
+        GIOStatus status = g_io_channel_read_line(channel, &line, &length, NULL, NULL);
+        if (status == G_IO_STATUS_NORMAL) {
+            if (length > SERVER_REQUEST_MAX) server_reply("-", "ERROR malformed-request");
+            else server_handle_line(line);
+            g_free(line);
+            continue;
+        }
+        g_free(line);
+        if (status == G_IO_STATUS_AGAIN) return G_SOURCE_CONTINUE;
+        g_main_loop_quit(server_loop);
+        return G_SOURCE_REMOVE;
+    }
+}
+
+static int serve_atspi(void) {
+    /* A vanished parent is reported by the failing write, not by a signal. */
+    signal(SIGPIPE, SIG_IGN);
+    server_loop = g_main_loop_new(NULL, FALSE);
+
+    /* atspi_init() is for once per process: it answers 1 when called again, which
+     * init_atspi() would read as a failure. A failure is reported per request
+     * instead of ending the process, so the caller always gets an answer. */
+    server_atspi_status = atspi_init();
+    if (server_atspi_status == 0) atspi_set_timeout(ATSPI_CALL_TIMEOUT_MS, -1);
+
+    GIOChannel *channel = g_io_channel_unix_new(STDIN_FILENO);
+    g_io_channel_set_encoding(channel, NULL, NULL);
+    g_io_channel_set_flags(channel, G_IO_FLAG_NONBLOCK, NULL);
+    g_io_add_watch(channel, G_IO_IN | G_IO_HUP | G_IO_ERR, server_on_stdin, NULL);
+    g_main_loop_run(server_loop);
+
+    g_io_channel_unref(channel);
+    g_main_loop_unref(server_loop);
     return 0;
 }
 #endif
@@ -810,15 +971,22 @@ static int send_media_play_pause(void) {
 /* Resolve the paste key sequence. --shift-insert wins outright (used when the
  * caller already knows context is unknown or Konsole). Otherwise: terminal
  * detection via atspi, then X11 class, then parent class — same fallback
- * chain the binary used before this enum existed. */
+ * chain the binary used before this enum existed. A caller that already asked
+ * the --atspi-server passes its answer (0 or 1) as atspi_terminal, so this
+ * process does not walk the AT-SPI tree itself; -1 means it was not asked. */
 static paste_mode_t resolve_paste_mode(int force_terminal, int force_shift_insert,
-                                       Window target_window)
+                                       Window target_window, int atspi_terminal)
 {
     if (force_shift_insert) return PASTE_MODE_SHIFT_INSERT;
 
     int is_term = force_terminal;
 #ifdef HAVE_ATSPI
-    if (!is_term) { int r = detect_terminal_atspi(); if (r >= 0) is_term = r; }
+    if (!is_term) {
+        int r = atspi_terminal >= 0 ? atspi_terminal : detect_terminal_atspi();
+        if (r >= 0) is_term = r;
+    }
+#else
+    (void)atspi_terminal;
 #endif
     if (!is_term) {
         Display *dpy = XOpenDisplay(NULL);
@@ -1080,6 +1248,8 @@ int main(int argc, char *argv[]) {
     int input_region_server = 0;
     int atspi_target_only = 0;
     int atspi_selection = 0;
+    int atspi_server = 0;
+    int atspi_terminal = -1;
     int modifier_wait_ms = -1;
     const char *restore_token = NULL;
     Window target_window = None;
@@ -1107,6 +1277,11 @@ int main(int argc, char *argv[]) {
             atspi_target_only = 1;
         } else if (strcmp(argv[i], "--atspi-selection") == 0) {
             atspi_selection = 1;
+        } else if (strcmp(argv[i], "--atspi-server") == 0) {
+            atspi_server = 1;
+        } else if (strcmp(argv[i], "--atspi-terminal") == 0 && i + 1 < argc) {
+            const char *answer = argv[++i];
+            atspi_terminal = strcmp(answer, "1") == 0 ? 1 : strcmp(answer, "0") == 0 ? 0 : -1;
         } else if (strcmp(argv[i], "--restore-token") == 0 && i + 1 < argc) {
             restore_token = argv[++i];
         } else if (strcmp(argv[i], "--window") == 0 && i + 1 < argc) {
@@ -1119,6 +1294,16 @@ int main(int argc, char *argv[]) {
     /* Callers pair these flags with --capabilities, so an older binary that
      * ignores them prints its capabilities and exits instead of pasting. */
     if (input_region_server) return serve_input_region(target_window);
+
+    if (atspi_server) {
+#ifdef HAVE_ATSPI
+        return serve_atspi();
+#else
+        /* Without AT-SPI there is no server: --capabilities, which callers pair
+         * with the flag, then leaves atspi-server-v1 out. */
+        if (!capabilities_only) return 5;
+#endif
+    }
 
     if (modifier_wait_ms >= 0) {
         static const char *state_names[] = { "released", "held", "unknown" };
@@ -1138,7 +1323,7 @@ int main(int argc, char *argv[]) {
         printf(" portal-keysym-v1 portal-keycode-v1");
 #endif
 #ifdef HAVE_ATSPI
-        printf(" atspi-selection-v1");
+        printf(" atspi-selection-v1 atspi-server-v1");
 #endif
         printf("\n");
         return 0;
@@ -1166,7 +1351,8 @@ int main(int argc, char *argv[]) {
 
     if (use_portal) {
 #ifdef HAVE_GIO
-        paste_mode_t mode = resolve_paste_mode(force_terminal, force_shift_insert, target_window);
+        paste_mode_t mode = resolve_paste_mode(force_terminal, force_shift_insert,
+                                               target_window, atspi_terminal);
         return paste_via_portal(mode, restore_token, copy_mode, portal_keycodes);
 #else
         fprintf(stderr, "portal support not compiled in\n");
@@ -1176,7 +1362,8 @@ int main(int argc, char *argv[]) {
 
     if (use_uinput) {
 #ifdef HAVE_UINPUT
-        paste_mode_t mode = resolve_paste_mode(force_terminal, force_shift_insert, target_window);
+        paste_mode_t mode = resolve_paste_mode(force_terminal, force_shift_insert,
+                                               target_window, atspi_terminal);
         return paste_via_uinput(mode, copy_mode);
 #else
         fprintf(stderr, "uinput support not compiled in\n");
@@ -1197,7 +1384,8 @@ int main(int argc, char *argv[]) {
         activate_window(dpy, target_window);
     }
 
-    paste_mode_t mode = resolve_paste_mode(force_terminal, force_shift_insert, target_window);
+    paste_mode_t mode = resolve_paste_mode(force_terminal, force_shift_insert,
+                                           target_window, atspi_terminal);
 
     if (!copy_mode && mode == PASTE_MODE_SHIFT_INSERT) {
         KeyCode shift  = XKeysymToKeycode(dpy, XK_Shift_L);

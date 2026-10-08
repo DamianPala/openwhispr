@@ -907,6 +907,137 @@ test("portal exit six reports unavailable symbolic input", async () => {
   );
 });
 
+// The AT-SPI server tells the paste whether the active window is a terminal, so the
+// helper does not walk AT-SPI itself (each such process leaves dead connections in
+// the applications it walked).
+function makeTerminalServer(answers) {
+  const asked = [];
+  return {
+    asked,
+    queryTerminal: async () => {
+      asked.push(true);
+      return answers.shift() ?? null;
+    },
+  };
+}
+
+test("the server's terminal answer becomes --atspi-terminal, and nothing else does", async () => {
+  assert.deepEqual(await new ClipboardManager()._atspiTerminalArgs(), []);
+  for (const [answer, expected] of [
+    ["1", ["--atspi-terminal", "1"]],
+    ["0", ["--atspi-terminal", "0"]],
+    [null, []],
+  ]) {
+    const manager = new ClipboardManager({ atspiServer: makeTerminalServer([answer]) });
+    assert.deepEqual(await manager._atspiTerminalArgs(), expected);
+  }
+});
+
+test("portal paste passes the server's terminal answer before the restore token", async () => {
+  const calls = [];
+  const TestClipboardManager = loadClipboardManager({ spawn: createSuccessfulSpawn(calls) });
+  const server = makeTerminalServer(["1", "0", "1", "1"]);
+  const manager = new TestClipboardManager({ atspiServer: server });
+  const tokens = [null, null, "restore-token", null];
+  manager._readPortalToken = () => tokens.shift();
+
+  await manager._runPortalPaste("/tmp/linux-fast-paste");
+  await manager._runPortalPaste("/tmp/linux-fast-paste", { copy: true });
+  await manager._runPortalPaste("/tmp/linux-fast-paste");
+  assert.deepEqual(
+    calls.map((call) => call.args),
+    [
+      ["--portal", "--atspi-terminal", "1"],
+      ["--portal", "--copy", "--atspi-terminal", "0"],
+      ["--portal", "--atspi-terminal", "1", "--restore-token", "restore-token"],
+    ]
+  );
+
+  // A chord the caller already settled is not asked about again.
+  calls.length = 0;
+  server.asked.length = 0;
+  await manager._runPortalPaste("/tmp/linux-fast-paste", { terminal: true });
+  await manager._runPortalPaste("/tmp/linux-fast-paste", { shiftInsert: true });
+  assert.deepEqual(
+    calls.map((call) => call.args),
+    [
+      ["--portal", "--terminal"],
+      ["--portal", "--shift-insert"],
+    ]
+  );
+  assert.equal(server.asked.length, 0);
+});
+
+test("an X11 paste tells the helper what the server said about the terminal", async () => {
+  for (const [answers, expected] of [
+    [["1"], ["--atspi-terminal", "1"]],
+    [["0"], ["--atspi-terminal", "0"]],
+    [[], []],
+  ]) {
+    const spawnCalls = [];
+    const TestClipboardManager = loadClipboardManager({
+      spawn: createSuccessfulSpawn(spawnCalls),
+    });
+    const manager = new TestClipboardManager({ atspiServer: makeTerminalServer(answers) });
+    manager.commandExists = () => false;
+    manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+
+    const previous = { ...process.env };
+    process.env.XDG_SESSION_TYPE = "x11";
+    process.env.DISPLAY = ":0";
+    delete process.env.WAYLAND_DISPLAY;
+    try {
+      await manager.pasteLinux(null);
+    } finally {
+      for (const key of ["XDG_SESSION_TYPE", "DISPLAY", "WAYLAND_DISPLAY"]) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+
+    assert.deepEqual(
+      spawnCalls.map((call) => call.args),
+      [expected],
+      `server answers ${JSON.stringify(answers)}`
+    );
+  }
+});
+
+test("a terminal the paste already recognised is not put to the server", async () => {
+  const spawnCalls = [];
+  const xdotoolAnswers = { getactivewindow: "77", getwindowclassname: "kitty" };
+  const TestClipboardManager = loadClipboardManager({
+    spawn: createSuccessfulSpawn(spawnCalls),
+    spawnSync: (command, args) => {
+      const answer = command === "xdotool" ? xdotoolAnswers[args[0]] : undefined;
+      return answer ? { status: 0, stdout: Buffer.from(answer) } : { status: 1, stdout: "" };
+    },
+  });
+  const server = makeTerminalServer(["0"]);
+  const manager = new TestClipboardManager({ atspiServer: server });
+  manager.commandExists = (command) => command === "xdotool";
+  manager.resolveLinuxFastPasteBinary = () => "/tmp/linux-fast-paste";
+
+  const previous = { ...process.env };
+  process.env.XDG_SESSION_TYPE = "x11";
+  process.env.DISPLAY = ":0";
+  delete process.env.WAYLAND_DISPLAY;
+  try {
+    await manager.pasteLinux(null);
+  } finally {
+    for (const key of ["XDG_SESSION_TYPE", "DISPLAY", "WAYLAND_DISPLAY"]) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+
+  assert.deepEqual(
+    spawnCalls.map((call) => call.args),
+    [["--window", "77", "--terminal"]]
+  );
+  assert.equal(server.asked.length, 0);
+});
+
 test("Wayland ydotool uses raw Shift+Insert keycodes", async () => {
   const spawnCalls = [];
   const TestClipboardManager = loadClipboardManager({
