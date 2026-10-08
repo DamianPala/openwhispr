@@ -908,6 +908,33 @@ static int test_key_bit(const unsigned char *bits, int code) {
  * The name is the same in ydotool 0.1.x and 1.0.x. */
 #define YDOTOOLD_DEVICE_NAME "ydotoold virtual device"
 
+static int read_sysfs_line(const char *event_name, const char *attribute, char *line, size_t size) {
+    char path[512];
+    snprintf(path, sizeof(path), "/sys/class/input/%s/device/%s", event_name, attribute);
+    FILE *file = fopen(path, "r");
+    if (!file) return 0;
+    int read_ok = fgets(line, (int)size, file) != NULL;
+    fclose(file);
+    if (read_ok) line[strcspn(line, "\n")] = '\0';
+    return read_ok;
+}
+
+/* Releasing an evdev node waits for an RCU grace period (3-8 ms each), and
+ * there are dozens of nodes, so devices that cannot pass the test in
+ * open_keyboards() are ruled out from sysfs without being opened. What sysfs
+ * does not answer is left to open_keyboards(). */
+static int sysfs_rules_out(const char *event_name) {
+    char line[512];
+    if (read_sysfs_line(event_name, "name", line, sizeof(line)) &&
+        strcmp(line, YDOTOOLD_DEVICE_NAME) == 0) return 1;
+    /* Hex words, most significant first; KEY_A sits in the last one. */
+    if (read_sysfs_line(event_name, "capabilities/key", line, sizeof(line))) {
+        const char *last_word = strrchr(line, ' ');
+        return !((strtoul(last_word ? last_word + 1 : line, NULL, 16) >> KEY_A) & 1);
+    }
+    return 0;
+}
+
 /* The KEY_A test from linux-key-listener.c: EV_KEY devices with a KEY_A bit. */
 static int open_keyboards(int *fds) {
     DIR *dir = opendir("/dev/input");
@@ -917,6 +944,7 @@ static int open_keyboards(int *fds) {
     struct dirent *ent;
     while ((ent = readdir(dir)) && count < MAX_KEYBOARDS) {
         if (strncmp(ent->d_name, "event", 5) != 0) continue;
+        if (sysfs_rules_out(ent->d_name)) continue;
 
         char path[512];
         snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
@@ -973,18 +1001,40 @@ static long monotonic_ms(void) {
     return now.tv_sec * 1000L + now.tv_nsec / 1000000L;
 }
 
-static modifier_state_t await_modifier_release(int timeout_ms, int *waited_ms) {
+/* Closing the keyboards costs an RCU grace period each, and the caller waits for
+ * this process to exit. A forked child shares the open files, so the parent's
+ * exit drops no last reference and costs nothing; the child closes them once the
+ * parent is gone. It gives up the stdio pipes first, or the caller would wait
+ * for them to close too. */
+static void close_keyboards_after_exit(const int *fds, int count) {
+    if (count == 0) return;
+    pid_t parent = getpid();
+    pid_t child = fork();
+    if (child > 0) return;
+    if (child == 0) {
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+        while (getppid() == parent) usleep(MODIFIER_POLL_MS * 1000);
+    }
+    for (int i = 0; i < count; i++) close(fds[i]);
+    if (child == 0) _exit(0);
+}
+
+/* Leaves the keyboards open: the caller prints the result, then hands them to
+ * close_keyboards_after_exit(). */
+static modifier_state_t await_modifier_release(int timeout_ms, int *waited_ms, int *fds,
+                                               int *count) {
     Display *display = is_wayland_session() ? NULL : XOpenDisplay(NULL);
-    int fds[MAX_KEYBOARDS];
-    int count = display ? 0 : open_keyboards(fds);
+    *count = display ? 0 : open_keyboards(fds);
     *waited_ms = 0;
-    if (!display && count == 0) return MODIFIERS_UNKNOWN;
+    if (!display && *count == 0) return MODIFIERS_UNKNOWN;
 
     /* Measured on the clock, not by counting sleeps: usleep overshoots under
      * load, and the caller kills a helper that runs past timeout + 1s. */
     long started_at = monotonic_ms();
     modifier_state_t state;
-    while ((state = display ? x11_modifier_state(display) : evdev_modifier_state(fds, count)) ==
+    while ((state = display ? x11_modifier_state(display) : evdev_modifier_state(fds, *count)) ==
                MODIFIERS_HELD &&
            *waited_ms < timeout_ms) {
         usleep(MODIFIER_POLL_MS * 1000);
@@ -992,7 +1042,6 @@ static modifier_state_t await_modifier_release(int timeout_ms, int *waited_ms) {
     }
 
     if (display) XCloseDisplay(display);
-    for (int i = 0; i < count; i++) close(fds[i]);
 
     if (state == MODIFIERS_RELEASED && *waited_ms > 0) usleep(MODIFIER_SETTLE_MS * 1000);
     return state;
@@ -1050,8 +1099,12 @@ int main(int argc, char *argv[]) {
     if (modifier_wait_ms >= 0) {
         static const char *state_names[] = { "released", "held", "unknown" };
         int waited_ms;
-        modifier_state_t state = await_modifier_release(modifier_wait_ms, &waited_ms);
+        int fds[MAX_KEYBOARDS];
+        int count;
+        modifier_state_t state = await_modifier_release(modifier_wait_ms, &waited_ms, fds, &count);
         printf("MODIFIERS %s %d\n", state_names[state], waited_ms);
+        fflush(stdout);
+        close_keyboards_after_exit(fds, count);
         return 0;
     }
 

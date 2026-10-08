@@ -1,12 +1,14 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/uinput.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* Drives the Wayland (evdev) side of --await-modifier-release with uinput
@@ -127,6 +129,42 @@ static void finish_wait(FILE *output, const char *expected_state, int min_waited
   }
 }
 
+/* The caller waits for stdout and stderr to close, not only for the helper to
+ * exit, so nothing the helper leaves behind to release the keyboards may keep
+ * them open. */
+static void check_pipe_closes_without_a_straggler(void)
+{
+  int fds[2];
+  require(pipe(fds) == 0, "cannot create a pipe");
+  pid_t pid = fork();
+  require(pid >= 0, "cannot fork");
+  if (pid == 0) {
+    dup2(fds[1], STDOUT_FILENO);
+    dup2(fds[1], STDERR_FILENO);
+    close(fds[0]);
+    close(fds[1]);
+    execl(helper, helper, "--capabilities", "--await-modifier-release", "1000", (char *)NULL);
+    _exit(127);
+  }
+  close(fds[1]);
+
+  char output[128] = "";
+  size_t length = 0;
+  for (;;) {
+    struct pollfd ready = { .fd = fds[0], .events = POLLIN };
+    require(poll(&ready, 1, 2000) == 1, "helper left a process holding its stdout");
+    ssize_t count = read(fds[0], output + length, sizeof(output) - 1 - length);
+    require(count >= 0, "cannot read helper output");
+    if (count == 0) break;
+    length += (size_t)count;
+  }
+  close(fds[0]);
+  int status;
+  require(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "helper exited with an error");
+  require(strcmp(output, "MODIFIERS released 0\n") == 0, "helper did not report released");
+}
+
 int main(int argc, char **argv)
 {
   require(argc == 2, "usage: linuxModifierGateEvdev <linux-fast-paste>");
@@ -137,6 +175,7 @@ int main(int argc, char **argv)
   finish_wait(start_wait(100), "held", 100, 1000);
   set_ctrl(&keyboard, 0);
   finish_wait(start_wait(1000), "released", 0, 0);
+  check_pipe_closes_without_a_straggler();
 
   /* ydotoold's virtual keyboard can keep a modifier down after an interrupted
    * chord. That is not the user's hand, so it must not hold every paste back. */
