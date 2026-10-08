@@ -1557,7 +1557,13 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         }
       }
 
-      await this.beginMicRecovery(micStream);
+      // Same reasoning as the streaming start: arming recovery enumerates
+      // devices (40-90 ms measured) and nothing between here and the return
+      // needs it armed. The caller plays the start cue once this promise
+      // resolves, so this await was on that critical path too.
+      this.beginMicRecovery(micStream).catch((error) => {
+        logger.warn("Mic recovery arm failed", { error: error?.message }, "audio");
+      });
 
       return true;
     } catch (error) {
