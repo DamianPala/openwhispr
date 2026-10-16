@@ -904,6 +904,10 @@
       "removeFillers": {
         "label": "Remove Filler Words",
         "description": "Drops \"um\", \"uh\", \"yyy\" before the text is pasted."
+      },
+      "voiceCommands": {
+        "label": "Voice Editing Commands",
+        "description": "Say \"CTRL, delete word\" after a pause to edit the live transcript."
       }
     },
     "tinfoil": {

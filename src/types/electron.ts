@@ -2938,6 +2938,7 @@ declare global {
           extraLanguages?: string[];
           region?: string;
           removeFillers?: boolean;
+          voiceCommands?: boolean;
         }
       ) => Promise<{ success: boolean; error?: string } & PolicyFailureMetadata>;
       sonioxStreamingSend?: (audioBuffer: ArrayBuffer) => void;
@@ -2972,6 +2973,7 @@ declare global {
         region?: string;
         keyterms?: string[];
         removeFillers?: boolean;
+        voiceCommands?: boolean;
       }) => Promise<{
         success?: boolean;
         text?: string;

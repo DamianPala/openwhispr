@@ -1703,3 +1703,40 @@ test("a selection edit that fails during the language re-transcription surfaces 
   assert.deepEqual(cancelled.errors, []);
   assert.deepEqual(cancelled.published, []);
 });
+
+test("a final that voice commands shortened updates the text without a commit", async (t) => {
+  const AudioManager = await loadManagerClass(t);
+  installCapture(t);
+  let deliverFinal;
+  const provider = startingOrukeetProvider({
+    start: async () => ({ success: true }),
+    onFinal: (callback) => {
+      deliverFinal = callback;
+      return () => {};
+    },
+  });
+  const { manager } = createStartingManager(AudioManager, { providerName: "openai", provider });
+  const commits = [];
+  manager.onStreamingCommit = (segment) => commits.push(segment);
+
+  assert.equal(await manager.startStreamingRecording(), true);
+  deliverFinal("one two");
+  deliverFinal("one two three");
+  assert.deepEqual(commits, ["one two", " three"]);
+
+  // "CTRL, delete word": the accumulated text is shorter than the last one.
+  deliverFinal("one two");
+  assert.equal(manager.streamingFinalText, "one two");
+  assert.deepEqual(commits, ["one two", " three"]);
+
+  // The next growth is measured from the shortened text.
+  deliverFinal("one two four");
+  assert.deepEqual(commits, ["one two", " three", " four"]);
+
+  // A rewritten tail that is not a plain extension is not a segment either.
+  deliverFinal("one two five six");
+  deliverFinal("one two five");
+  assert.equal(manager.streamingFinalText, "one two five");
+  assert.deepEqual(commits, ["one two", " three", " four"]);
+  await manager.cancelStreamingRecording();
+});

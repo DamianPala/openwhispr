@@ -904,6 +904,10 @@
       "removeFillers": {
         "label": "移除贅詞",
         "description": "在貼上文字前移除 \"um\"、\"uh\"、\"yyy\" 等贅詞。"
+      },
+      "voiceCommands": {
+        "label": "語音編輯指令",
+        "description": "停頓後說 \"CTRL, delete word\"，即可編輯即時逐字稿。"
       }
     },
     "tinfoil": {

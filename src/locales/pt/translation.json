@@ -883,6 +883,10 @@
       "removeFillers": {
         "label": "Remover palavras de preenchimento",
         "description": "Remove \"um\", \"uh\", \"yyy\" antes de o texto ser colado."
+      },
+      "voiceCommands": {
+        "label": "Comandos de edição por voz",
+        "description": "Diga \"CTRL, delete word\" após uma pausa para editar a transcrição em direto."
       }
     },
     "tinfoil": {

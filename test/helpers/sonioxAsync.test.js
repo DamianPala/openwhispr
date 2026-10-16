@@ -119,6 +119,75 @@ describe("transcribeRecording", () => {
     });
   });
 
+  describe("voice commands", () => {
+    const transcriptPath = `GET /v1/transcriptions/${JOB_ID}/transcript`;
+    const spoken = {
+      tokens: [
+        { text: "one", start_ms: 0, end_ms: 200 },
+        { text: " two", start_ms: 250, end_ms: 450 },
+        { text: " three", start_ms: 500, end_ms: 700 },
+        { text: " CTRL", start_ms: 1700, end_ms: 1900 },
+        { text: ",", start_ms: 1900, end_ms: 1950 },
+        { text: " delete", start_ms: 2000, end_ms: 2200 },
+        { text: " word", start_ms: 2250, end_ms: 2450 },
+        { text: ".", start_ms: 2450, end_ms: 2500 },
+        { text: " Four", start_ms: 2600, end_ms: 2800 },
+      ],
+    };
+    const script = { [transcriptPath]: (res) => json(res, 200, spoken) };
+
+    it("applies the commands to the transcript tokens when switched on", async () => {
+      await withSoniox(script, async ({ baseUrl, requests }) => {
+        const result = await transcribeRecording({
+          ...base,
+          baseUrl,
+          language: "en",
+          voiceCommands: true,
+        });
+        assert.equal(result.text, "one two four");
+        const create = JSON.parse(requests[1].body.toString());
+        assert.deepEqual(create.context, { terms: ["CTRL"] });
+      });
+    });
+
+    it("keeps the spoken command in the text when switched off", async () => {
+      await withSoniox(script, async ({ baseUrl, requests }) => {
+        const result = await transcribeRecording({ ...base, baseUrl, language: "en" });
+        assert.equal(result.text, "one two three CTRL, delete word. Four");
+        const create = JSON.parse(requests[1].body.toString());
+        assert.equal("context" in create, false);
+      });
+    });
+
+    it("runs the commands before the filler removal, on a reply without timing", async () => {
+      const untimed = {
+        tokens: [{ text: "Hello" }, { text: " uh" }, { text: " world." }, { text: " CTRL" }].concat(
+          [{ text: " delete" }, { text: " word" }, { text: "." }]
+        ),
+      };
+      await withSoniox({ [transcriptPath]: (res) => json(res, 200, untimed) }, async (server) => {
+        const result = await transcribeRecording({
+          ...base,
+          baseUrl: server.baseUrl,
+          voiceCommands: true,
+        });
+        assert.equal(result.text, "Hello", "the command goes, then the filler");
+      });
+    });
+
+    it("reads a reply that carries only text", async () => {
+      const textOnly = { text: "Hello world. CTRL, delete word." };
+      await withSoniox({ [transcriptPath]: (res) => json(res, 200, textOnly) }, async (server) => {
+        const result = await transcribeRecording({
+          ...base,
+          baseUrl: server.baseUrl,
+          voiceCommands: true,
+        });
+        assert.equal(result.text, "Hello");
+      });
+    });
+  });
+
   it("sends no hints that were not asked for", async () => {
     await withSoniox({}, async ({ baseUrl, requests }) => {
       await transcribeRecording({ ...base, baseUrl, language: "auto" });

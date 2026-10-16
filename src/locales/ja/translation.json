@@ -904,6 +904,10 @@
       "removeFillers": {
         "label": "フィラーワードを削除",
         "description": "貼り付け前に \"um\"、\"uh\"、\"yyy\" などのフィラーワードを取り除きます。"
+      },
+      "voiceCommands": {
+        "label": "音声編集コマンド",
+        "description": "少し間を置いて \"CTRL, delete word\" と言うと、ライブ文字起こしを編集できます。"
       }
     },
     "tinfoil": {

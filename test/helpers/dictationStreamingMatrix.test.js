@@ -339,6 +339,20 @@ test("options: soniox carries region and extra languages only when a language is
     keyterms: [],
   });
   assert.equal(removeFillersOff.removeFillers, false);
+
+  assert.equal(withLanguage.voiceCommands, false, "voice commands are off unless switched on");
+  const voiceCommandsOn = buildStreamingSessionOptions({
+    providerName: "soniox",
+    settings: settingsWith({
+      cloudTranscriptionProvider: "soniox",
+      cloudTranscriptionMode: "byok",
+      cloudTranscriptionModel: "stt-rt-v5",
+      sonioxVoiceCommands: true,
+    }),
+    language: "en",
+    keyterms: [],
+  });
+  assert.equal(voiceCommandsOn.voiceCommands, true);
 });
 
 test("options: provider is stamped for every renderer channel binding", async () => {

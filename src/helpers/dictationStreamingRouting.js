@@ -167,6 +167,7 @@ export function buildStreamingSessionOptions({
     }
     options.region = settings.sonioxRegion || "us";
     options.removeFillers = settings.sonioxRemoveFillers !== false;
+    options.voiceCommands = settings.sonioxVoiceCommands === true;
   }
   return options;
 }

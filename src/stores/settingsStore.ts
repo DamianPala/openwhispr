@@ -314,6 +314,7 @@ const BOOLEAN_SETTINGS = new Set([
   "mcalPrimaryOnly",
   "appleCalendarConnected",
   "sonioxRemoveFillers",
+  "sonioxVoiceCommands",
 ]);
 
 const ARRAY_SETTINGS = new Set([
@@ -1173,9 +1174,11 @@ export interface SettingsState
   sonioxExtraLanguages: string[];
   sonioxRegion: string;
   sonioxRemoveFillers: boolean;
+  sonioxVoiceCommands: boolean;
   setSonioxExtraLanguages: (codes: string[]) => void;
   setSonioxRegion: (value: string) => void;
   setSonioxRemoveFillers: (value: boolean) => void;
+  setSonioxVoiceCommands: (value: boolean) => void;
 
   // Enterprise providers
   enterpriseSetupMode: EnterpriseSetupMode;
@@ -1562,6 +1565,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   sonioxExtraLanguages: readStringArray("sonioxExtraLanguages", []),
   sonioxRegion: readString("sonioxRegion", "us"),
   sonioxRemoveFillers: readBoolean("sonioxRemoveFillers", true),
+  sonioxVoiceCommands: readBoolean("sonioxVoiceCommands", false),
   customDictionary: readStringArray("customDictionary", []),
   snippets: (() => {
     try {
@@ -2254,6 +2258,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   },
   setSonioxRegion: createStringSetter("sonioxRegion"),
   setSonioxRemoveFillers: createBooleanSetter("sonioxRemoveFillers"),
+  setSonioxVoiceCommands: createBooleanSetter("sonioxVoiceCommands"),
   setCustomTranscriptionApiKey: (key: string) => {
     set({ customTranscriptionApiKey: key });
     debouncedSaveSecret("customTranscription", key);

@@ -904,6 +904,10 @@
       "removeFillers": {
         "label": "Füllwörter entfernen",
         "description": "Entfernt \"um\", \"uh\", \"yyy\", bevor der Text eingefügt wird."
+      },
+      "voiceCommands": {
+        "label": "Sprachbefehle zum Bearbeiten",
+        "description": "Sagen Sie nach einer Pause \"CTRL, delete word\", um das Live-Transkript zu bearbeiten."
       }
     },
     "tinfoil": {

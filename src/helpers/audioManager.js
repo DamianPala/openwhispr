@@ -3679,6 +3679,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         region: options.region,
         keyterms: options.keyterms,
         removeFillers: options.removeFillers,
+        voiceCommands: options.voiceCommands,
       });
       if (result?.error) throw errorFromIpcResult(result);
       return result;
@@ -4994,11 +4995,13 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         if (!ownsSession()) return;
         // text = accumulated final text from streaming provider.
         // Extract just the new segment (delta from previous accumulated final).
-        const prevLen = this.streamingFinalText.length;
+        // Voice editing commands can make the accumulated text shorter or
+        // rewrite its tail; only plain growth is a new segment to commit.
+        const previous = this.streamingFinalText;
         this.streamingFinalText = text;
         this.streamingPartialText = "";
         this.streamingTextBump?.();
-        const newSegment = text.slice(prevLen);
+        const newSegment = text.startsWith(previous) ? text.slice(previous.length) : "";
         if (newSegment) {
           this.onStreamingCommit?.(newSegment);
         }

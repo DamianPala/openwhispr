@@ -904,6 +904,10 @@
       "removeFillers": {
         "label": "Rimuovi le parole di riempimento",
         "description": "Rimuove \"um\", \"uh\", \"yyy\" prima che il testo venga incollato."
+      },
+      "voiceCommands": {
+        "label": "Comandi di modifica vocale",
+        "description": "Di' \"CTRL, delete word\" dopo una pausa per modificare la trascrizione in tempo reale."
       }
     },
     "tinfoil": {

@@ -4337,6 +4337,10 @@
       "removeFillers": {
         "label": "إزالة كلمات الحشو",
         "description": "يزيل \"um\" و\"uh\" و\"yyy\" قبل لصق النص."
+      },
+      "voiceCommands": {
+        "label": "أوامر التحرير الصوتية",
+        "description": "قل \"CTRL, delete word\" بعد توقف قصير لتحرير النص المباشر."
       }
     },
     "tinfoil": {

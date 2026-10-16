@@ -9698,7 +9698,15 @@ class IPCHandlers {
 
     ipcMain.handle("update-dictation-preview", (_event, text) =>
       queueDictationPreviewOperation(async () => {
-        if (typeof text !== "string" || !text.trim()) {
+        if (typeof text !== "string") {
+          return { success: true };
+        }
+        if (!text.trim()) {
+          // A voice editing command can delete everything shown so far, and the
+          // open preview must follow; an empty text never opens one.
+          if (dictationPreviewSessionActive) {
+            await this.windowManager.showTranscriptionPreview("");
+          }
           return { success: true };
         }
         if (!dictationPreviewSessionActive) {
@@ -11636,6 +11644,7 @@ class IPCHandlers {
             extraLanguages: request.extraLanguages,
             keyterms: request.keyterms,
             removeFillers: request.removeFillers !== false,
+            voiceCommands: request.voiceCommands === true,
             signal: controller.signal,
             fetchImpl: proxyFetch,
           });

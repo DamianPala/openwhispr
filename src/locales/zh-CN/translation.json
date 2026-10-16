@@ -904,6 +904,10 @@
       "removeFillers": {
         "label": "移除填充词",
         "description": "在粘贴文本前移除 \"um\"、\"uh\"、\"yyy\" 等填充词。"
+      },
+      "voiceCommands": {
+        "label": "语音编辑命令",
+        "description": "停顿后说 \"CTRL, delete word\"，即可编辑实时转录。"
       }
     },
     "tinfoil": {

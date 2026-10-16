@@ -2,6 +2,7 @@ const WebSocket = require("ws");
 const debugLogger = require("./debugLogger");
 const { isPrivateHost } = require("./providerConnectionTest");
 const { STREAMING_CONNECTION_FAILED } = require("./streamingConnectionErrors");
+const { applyVoiceCommands } = require("./voiceCommands");
 
 const WEBSOCKET_TIMEOUT_MS = 15000;
 const DISCONNECT_TIMEOUT_MS = 3000;
@@ -18,6 +19,11 @@ const SONIOX_REGION_HOSTS = {
 const SONIOX_REGIONS = Object.keys(SONIOX_REGION_HOSTS);
 const SONIOX_WS_PATH = "/transcribe-websocket";
 const DEFAULT_MODEL = "stt-rt-v5";
+const VOICE_COMMAND_TERM = "CTRL";
+// Soniox accepts 500–3000 ms. At 500 a short pause inside a sentence already
+// ended it (full stop, capital letter) and split commands in two; 1000 still
+// cut pauses for thought.
+const VOICE_COMMAND_ENDPOINT_DELAY_MS = 1500;
 
 const toBaseLanguage = (l) => (l && l !== "auto" ? l.split("-")[0] : null);
 
@@ -32,7 +38,7 @@ const resolveModel = (model) => (model && model.startsWith("stt-rt-") ? model : 
 
 // What the recognizer is told about the speech, shared by the realtime config
 // and the async request so both transcribe the same dictation the same way.
-function buildHints({ language, extraLanguages, keyterms }) {
+function buildHints({ language, extraLanguages, keyterms, voiceCommands }) {
   const hints = {
     // Main language first, then extras in the user's order — new Set() keeps
     // insertion order, so this also dedupes a base code repeated between them.
@@ -43,20 +49,43 @@ function buildHints({ language, extraLanguages, keyterms }) {
     ],
   };
   const terms = (keyterms || []).filter(Boolean);
+  // The command prefix is a spoken abbreviation the recogniser may spell out
+  // or hear as "control"; as a term it is more often written "CTRL".
+  if (
+    voiceCommands &&
+    !terms.some((term) => term.toLowerCase() === VOICE_COMMAND_TERM.toLowerCase())
+  ) {
+    terms.push(VOICE_COMMAND_TERM);
+  }
   if (terms.length) {
     hints.context = { terms };
   }
   return hints;
 }
 
-function buildConfigMessage({ apiKey, model, language, extraLanguages, keyterms, sampleRate }) {
+function buildConfigMessage({
+  apiKey,
+  model,
+  language,
+  extraLanguages,
+  keyterms,
+  sampleRate,
+  voiceCommands,
+}) {
   return {
     api_key: apiKey,
     model: resolveModel(model),
     audio_format: "pcm_s16le",
     sample_rate: sampleRate || 16000,
     num_channels: 1,
-    ...buildHints({ language, extraLanguages, keyterms }),
+    ...buildHints({ language, extraLanguages, keyterms, voiceCommands: voiceCommands === true }),
+    // Commands act on final tokens only, and without endpoint detection Soniox
+    // keeps the tail non-final until more speech arrives, so a command spoken
+    // before a pause would wait for the user to talk again.
+    ...(voiceCommands === true && {
+      enable_endpoint_detection: true,
+      max_endpoint_delay_ms: VOICE_COMMAND_ENDPOINT_DELAY_MS,
+    }),
   };
 }
 
@@ -236,6 +265,8 @@ class SonioxStreaming {
     this.audioBytesSent = 0;
     this.currentModel = DEFAULT_MODEL;
     this.removeFillersEnabled = true;
+    this.voiceCommandsEnabled = false;
+    this.keyterms = [];
     this._finalizeSent = false;
     // Set once the server's <fin> token for the current session arrives —
     // the signal that closing right away loses no text (see disconnect()).
@@ -246,7 +277,32 @@ class SonioxStreaming {
   }
 
   getFullTranscript() {
-    return this._clean(this.finalTokens.map((t) => t.text).join(""));
+    return this._clean(this._finalText());
+  }
+
+  // The final tokens as text, with the voice editing commands applied when the
+  // setting is on. Recomputed from the whole list every time (see voiceCommands.js).
+  _finalText() {
+    if (this.voiceCommandsEnabled) {
+      return applyVoiceCommands(this.finalTokens, {
+        keyterms: this.keyterms,
+        skipFillers: this.removeFillersEnabled,
+      });
+    }
+    return this.finalTokens.map((t) => t.text).join("");
+  }
+
+  // Outcome of every command prefix in the finished recording, so a command
+  // that did not fire live can be explained from the log. No transcript text.
+  _logVoiceCommandTrace() {
+    if (!this.voiceCommandsEnabled) return;
+    const trace = [];
+    applyVoiceCommands(this.finalTokens, {
+      keyterms: this.keyterms,
+      skipFillers: this.removeFillersEnabled,
+      trace,
+    });
+    if (trace.length) debugLogger.debug("Soniox voice commands", { trace });
   }
 
   // removeFillers() already trims, so the disabled branch matches its shape.
@@ -337,6 +393,8 @@ class SonioxStreaming {
     const configMessage = buildConfigMessage(options);
     this.currentModel = configMessage.model;
     this.removeFillersEnabled = options.removeFillers !== false;
+    this.voiceCommandsEnabled = options.voiceCommands === true;
+    this.keyterms = options.keyterms || [];
 
     // coldStartBuffer is kept: frames the renderer sent before this call
     // belong to this session and go out after the config message.
@@ -451,19 +509,19 @@ class SonioxStreaming {
         }
       }
 
-      const rawFinal = this.finalTokens.map((t) => t.text).join("");
       this.currentNonFinalText = nonFinalTexts.join("");
 
       // Final first: the consumer appends the partial to its committed text, so
       // the partial carries only the non-final tail and must follow the commit.
       if (newFinalTokens) {
-        this.onFinalTranscript?.(this._clean(rawFinal));
+        this.onFinalTranscript?.(this._clean(this._finalText()));
       }
       this.onPartialTranscript?.(this._clean(this.currentNonFinalText));
       // <fin> closes a finalize: every token for the audio sent before it has
       // already arrived as final, so the stop path can move on without a timer.
       if (finalized) {
         this._finalized = true;
+        this._logVoiceCommandTrace();
         this.onFinalized?.();
       }
     } catch (err) {

@@ -504,6 +504,8 @@ export default function TranscriptionModelPicker({
   const setSonioxExtraLanguages = useSettingsStore((s) => s.setSonioxExtraLanguages);
   const sonioxRemoveFillers = useSettingsStore((s) => s.sonioxRemoveFillers);
   const setSonioxRemoveFillers = useSettingsStore((s) => s.setSonioxRemoveFillers);
+  const sonioxVoiceCommands = useSettingsStore((s) => s.sonioxVoiceCommands);
+  const setSonioxVoiceCommands = useSettingsStore((s) => s.setSonioxVoiceCommands);
   const preferredLanguage = useSettingsStore((s) => s.preferredLanguage);
   const isAutoLanguage = !preferredLanguage || preferredLanguage === "auto";
   const [isPickingExtraLanguage, setIsPickingExtraLanguage] = useState(false);
@@ -1547,6 +1549,20 @@ export default function TranscriptionModelPicker({
                       </div>
                       <p className="text-[10px] text-muted-foreground">
                         {t("transcription.soniox.removeFillers.description")}
+                      </p>
+                    </div>
+                  )}
+
+                  {displayedCloudProvider === "soniox" && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="text-xs font-medium text-foreground whitespace-nowrap">
+                          {t("transcription.soniox.voiceCommands.label")}
+                        </label>
+                        <Toggle checked={sonioxVoiceCommands} onChange={setSonioxVoiceCommands} />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        {t("transcription.soniox.voiceCommands.description")}
                       </p>
                     </div>
                   )}

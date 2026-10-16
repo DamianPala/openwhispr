@@ -260,6 +260,15 @@ describe("buildConfigMessage", () => {
     assert.deepEqual(msg.context, { terms: ["Qdrant"] });
   });
 
+  it("turns on fast endpoint detection only with voice commands", () => {
+    const on = buildConfigMessage({ apiKey: "k", voiceCommands: true });
+    assert.equal(on.enable_endpoint_detection, true);
+    assert.equal(on.max_endpoint_delay_ms, 1500);
+    const off = buildConfigMessage({ apiKey: "k" });
+    assert.equal("enable_endpoint_detection" in off, false);
+    assert.equal("max_endpoint_delay_ms" in off, false);
+  });
+
   it("omits context entirely when the dictionary is empty", () => {
     assert.equal(buildConfigMessage({ apiKey: "k", keyterms: [] }).context, undefined);
     assert.equal(buildConfigMessage({ apiKey: "k" }).context, undefined);

@@ -904,6 +904,10 @@
       "removeFillers": {
         "label": "Eliminar muletillas",
         "description": "Elimina \"um\", \"uh\", \"yyy\" antes de pegar el texto."
+      },
+      "voiceCommands": {
+        "label": "Comandos de edición por voz",
+        "description": "Di \"CTRL, delete word\" tras una pausa para editar la transcripción en vivo."
       }
     },
     "tinfoil": {

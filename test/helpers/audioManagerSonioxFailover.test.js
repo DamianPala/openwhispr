@@ -14,6 +14,7 @@ const SETTINGS = {
   sonioxRegion: "eu",
   sonioxExtraLanguages: ["en"],
   sonioxRemoveFillers: false,
+  sonioxVoiceCommands: true,
   isSignedIn: false,
 };
 
@@ -380,6 +381,7 @@ test("after stop the whole recording is transcribed through Soniox and replaces 
   assert.equal(request.region, "eu");
   assert.deepEqual(request.keyterms, ["Soniox"]);
   assert.equal(request.removeFillers, false);
+  assert.equal(request.voiceCommands, true);
   assert.ok(request.durationMs >= 11000 && request.durationMs <= 14000);
 
   assert.equal(events.completions.length, 1);

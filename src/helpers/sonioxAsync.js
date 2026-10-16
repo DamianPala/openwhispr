@@ -1,6 +1,7 @@
 const debugLogger = require("./debugLogger");
 const { ASYNC_INVALID_AUDIO } = require("./streamingConnectionErrors");
 const { removeFillers, buildHints, resolveRegion } = require("./sonioxStreaming");
+const { applyVoiceCommands } = require("./voiceCommands");
 const {
   PROVIDER_ERROR_CODES,
   providerHttpError,
@@ -217,13 +218,25 @@ async function finishRemote(client, { transcriptionId, fileId }, { finished, ret
   debugLogger.debug("Soniox async cleanup done", { transcriptionId, fileId }, "transcription");
 }
 
-function tokensToText(transcript) {
-  if (!Array.isArray(transcript?.tokens))
-    return typeof transcript?.text === "string" ? transcript.text : "";
-  return transcript.tokens
-    .map((token) => token.text)
-    .filter((text) => text && text !== "<fin>" && text !== "<end>" && text !== "�")
-    .join("");
+const isSpokenToken = (token) =>
+  Boolean(token?.text) && token.text !== "<fin>" && token.text !== "<end>" && token.text !== "�";
+
+// The recording as text. With voice commands on they are applied to the tokens
+// (their timing is what tells a command from dictation); a reply without tokens
+// is handed over as one token, which leaves only the no-timing rule to go by.
+function tokensToText(transcript, { voiceCommands, keyterms, skipFillers } = {}) {
+  const hasTokens = Array.isArray(transcript?.tokens);
+  if (!hasTokens && typeof transcript?.text !== "string") return "";
+  if (!voiceCommands) {
+    return hasTokens
+      ? transcript.tokens
+          .filter(isSpokenToken)
+          .map((token) => token.text)
+          .join("")
+      : transcript.text;
+  }
+  const tokens = hasTokens ? transcript.tokens.filter(isSpokenToken) : [{ text: transcript.text }];
+  return applyVoiceCommands(tokens, { keyterms, skipFillers });
 }
 
 // A deadline or a user cancel surfaces as the matching error; anything the
@@ -250,6 +263,7 @@ async function transcribeRecording({
   extraLanguages,
   keyterms,
   removeFillers: stripFillers = true,
+  voiceCommands = false,
   signal,
   fetchImpl = fetch,
   baseUrl = `https://${SONIOX_API_HOSTS[resolveRegion(region)]}`,
@@ -276,7 +290,12 @@ async function transcribeRecording({
       "transcription"
     );
 
-    const hints = buildHints({ language, extraLanguages, keyterms: capTerms(keyterms) });
+    const hints = buildHints({
+      language,
+      extraLanguages,
+      keyterms: capTerms(keyterms),
+      voiceCommands,
+    });
     const created = await client.createTranscription({ fileId: file.id, hints, signal: abort });
     remote.transcriptionId = created.id;
 
@@ -290,7 +309,7 @@ async function transcribeRecording({
     timings.processingMs = Date.now() - startedAt - timings.uploadMs;
 
     const transcript = await client.getJson(`/v1/transcriptions/${created.id}/transcript`, abort);
-    const raw = tokensToText(transcript);
+    const raw = tokensToText(transcript, { voiceCommands, keyterms, skipFillers: stripFillers });
     finished = true;
     timings.totalMs = Date.now() - startedAt;
     debugLogger.info(
