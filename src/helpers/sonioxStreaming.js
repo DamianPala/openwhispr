@@ -2,7 +2,7 @@ const WebSocket = require("ws");
 const debugLogger = require("./debugLogger");
 const { isPrivateHost } = require("./providerConnectionTest");
 const { STREAMING_CONNECTION_FAILED } = require("./streamingConnectionErrors");
-const { applyVoiceCommands } = require("./voiceCommands");
+const { applyVoiceCommands, hasPendingCommand } = require("./voiceCommands");
 
 const WEBSOCKET_TIMEOUT_MS = 15000;
 const DISCONNECT_TIMEOUT_MS = 3000;
@@ -19,11 +19,21 @@ const SONIOX_REGION_HOSTS = {
 const SONIOX_REGIONS = Object.keys(SONIOX_REGION_HOSTS);
 const SONIOX_WS_PATH = "/transcribe-websocket";
 const DEFAULT_MODEL = "stt-rt-v5";
-const VOICE_COMMAND_TERM = "CTRL";
-// Soniox accepts 500–3000 ms. At 500 a short pause inside a sentence already
-// ended it (full stop, capital letter) and split commands in two; 1000 still
-// cut pauses for thought.
-const VOICE_COMMAND_ENDPOINT_DELAY_MS = 1500;
+const VOICE_COMMAND_TERMS = [
+  "CTRL",
+  "CTRL usuń",
+  "CTRL usuń zdanie",
+  "CTRL usuń słowo",
+  "CTRL cofnij",
+  "CTRL delete",
+];
+// Endpoint detection stays off, since it ends a sentence (full stop, capital
+// letter) at every pause for thought. A command is finalized by hand instead:
+// once the live tokens end in one and the speaker has been quiet this long
+// (Soniox suggests ~200 ms of silence before a manual finalize).
+const COMMAND_FINALIZE_QUIET_MS = 700;
+// Soniox warns that finalizing too often can get the connection dropped.
+const COMMAND_FINALIZE_MIN_GAP_MS = 1500;
 
 const toBaseLanguage = (l) => (l && l !== "auto" ? l.split("-")[0] : null);
 
@@ -50,12 +60,15 @@ function buildHints({ language, extraLanguages, keyterms, voiceCommands }) {
   };
   const terms = (keyterms || []).filter(Boolean);
   // The command prefix is a spoken abbreviation the recogniser may spell out
-  // or hear as "control"; as a term it is more often written "CTRL".
-  if (
-    voiceCommands &&
-    !terms.some((term) => term.toLowerCase() === VOICE_COMMAND_TERM.toLowerCase())
-  ) {
-    terms.push(VOICE_COMMAND_TERM);
+  // or hear as "control"; as a term it is more often written "CTRL". With only
+  // "CTRL" it also formats "CTRL usuń" as a key chord ("Ctrl+8", "Ctrl+F"), so
+  // whole command phrases go in too.
+  if (voiceCommands) {
+    for (const term of VOICE_COMMAND_TERMS) {
+      if (!terms.some((existing) => existing.toLowerCase() === term.toLowerCase())) {
+        terms.push(term);
+      }
+    }
   }
   if (terms.length) {
     hints.context = { terms };
@@ -79,13 +92,6 @@ function buildConfigMessage({
     sample_rate: sampleRate || 16000,
     num_channels: 1,
     ...buildHints({ language, extraLanguages, keyterms, voiceCommands: voiceCommands === true }),
-    // Commands act on final tokens only, and without endpoint detection Soniox
-    // keeps the tail non-final until more speech arrives, so a command spoken
-    // before a pause would wait for the user to talk again.
-    ...(voiceCommands === true && {
-      enable_endpoint_detection: true,
-      max_endpoint_delay_ms: VOICE_COMMAND_ENDPOINT_DELAY_MS,
-    }),
   };
 }
 
@@ -246,6 +252,7 @@ class SonioxStreaming {
     this.isConnected = false;
     this.finalTokens = [];
     this.currentNonFinalText = "";
+    this.nonFinalTokens = [];
     this.coldStartBuffer = [];
     this.coldStartBufferSize = 0;
     this.onPartialTranscript = null;
@@ -268,9 +275,18 @@ class SonioxStreaming {
     this.voiceCommandsEnabled = false;
     this.keyterms = [];
     this._finalizeSent = false;
-    // Set once the server's <fin> token for the current session arrives —
-    // the signal that closing right away loses no text (see disconnect()).
+    // Set once the server's <fin> token for a stop finalize arrives — the
+    // signal that closing right away loses no text (see disconnect()).
     this._finalized = false;
+    // One entry per finalize sent and not yet answered, oldest first: "stop"
+    // (finalize(), the end of the recording) or "command" (a pending voice
+    // command). Each <fin> answers the oldest.
+    this._finalizeQueue = [];
+    this.commandFinalizeQuietMs = COMMAND_FINALIZE_QUIET_MS;
+    this.commandFinalizeMinGapMs = COMMAND_FINALIZE_MIN_GAP_MS;
+    this._commandTimer = null;
+    this._commandTimerKey = null;
+    this._lastCommandFinalizeAt = null;
     this._lastAudioSentAt = 0;
     this._connecting = false;
     this._connectPromise = null;
@@ -305,6 +321,75 @@ class SonioxStreaming {
       trace,
     });
     if (trace.length) debugLogger.debug("Soniox voice commands", { trace });
+  }
+
+  // Without endpoint detection Soniox keeps the tail of the speech non-final
+  // until more speech arrives, and a command acts on final tokens only. So when
+  // the live tokens end in a command and the speaker then stays quiet, the
+  // stream is finalized by hand. Plain dictation never reaches this.
+  _commandFinalizeAllowed() {
+    return (
+      this.voiceCommandsEnabled &&
+      !this.isDisconnecting &&
+      !this._finalizeSent &&
+      this.ws?.readyState === WebSocket.OPEN
+    );
+  }
+
+  _hasPendingCommand() {
+    if (this.nonFinalTokens.length === 0) return false;
+    return hasPendingCommand([...this.finalTokens, ...this.nonFinalTokens], {
+      keyterms: this.keyterms,
+      skipFillers: this.removeFillersEnabled,
+    });
+  }
+
+  // Runs after every message. A message that changes the final or non-final
+  // text restarts the quiet period; one that changes nothing leaves it running.
+  _updateCommandTimer() {
+    if (!this._commandFinalizeAllowed() || !this._hasPendingCommand()) {
+      this._clearCommandTimer();
+      return;
+    }
+    const key = `${this.finalTokens.length}|${this.currentNonFinalText}`;
+    if (this._commandTimer && key === this._commandTimerKey) return;
+    this._armCommandTimer(this.commandFinalizeQuietMs, key);
+  }
+
+  _armCommandTimer(delayMs, key) {
+    this._clearCommandTimer();
+    this._commandTimerKey = key;
+    this._commandTimer = setTimeout(() => this._onCommandTimer(), delayMs);
+  }
+
+  _clearCommandTimer() {
+    clearTimeout(this._commandTimer);
+    this._commandTimer = null;
+    this._commandTimerKey = null;
+  }
+
+  _onCommandTimer() {
+    const key = this._commandTimerKey;
+    this._commandTimer = null;
+    this._commandTimerKey = null;
+    if (!this._commandFinalizeAllowed() || !this._hasPendingCommand()) return;
+    // The <fin> that answers the one in flight runs _updateCommandTimer again.
+    if (this._finalizeQueue.includes("command")) return;
+    const sinceLast =
+      this._lastCommandFinalizeAt === null ? Infinity : Date.now() - this._lastCommandFinalizeAt;
+    if (sinceLast < this.commandFinalizeMinGapMs) {
+      this._armCommandTimer(this.commandFinalizeMinGapMs - sinceLast, key);
+      return;
+    }
+    try {
+      this.ws.send(JSON.stringify({ type: "finalize" }));
+    } catch (err) {
+      debugLogger.debug("Soniox command finalize failed", { error: err.message });
+      return;
+    }
+    this._finalizeQueue.push("command");
+    this._lastCommandFinalizeAt = Date.now();
+    debugLogger.debug("Soniox command finalize sent");
   }
 
   // removeFillers() already trims, so the disabled branch matches its shape.
@@ -402,8 +487,12 @@ class SonioxStreaming {
     // belong to this session and go out after the config message.
     this.finalTokens = [];
     this.currentNonFinalText = "";
+    this.nonFinalTokens = [];
     this.audioBytesSent = 0;
     this._finalizeSent = false;
+    this._finalizeQueue = [];
+    this._lastCommandFinalizeAt = null;
+    this._clearCommandTimer();
 
     const wsUrl = this.buildWebSocketUrl(options);
 
@@ -495,7 +584,7 @@ class SonioxStreaming {
         return;
       }
 
-      let nonFinalTexts = [];
+      let nonFinalTokens = [];
       let newFinalTokens = false;
       let finalized = false;
       const isValidToken = (t) =>
@@ -507,11 +596,12 @@ class SonioxStreaming {
           this.finalTokens.push(token);
           newFinalTokens = true;
         } else {
-          nonFinalTexts.push(token.text);
+          nonFinalTokens.push(token);
         }
       }
 
-      this.currentNonFinalText = nonFinalTexts.join("");
+      this.nonFinalTokens = nonFinalTokens;
+      this.currentNonFinalText = nonFinalTokens.map((t) => t.text).join("");
 
       // Final first: the consumer appends the partial to its committed text, so
       // the partial carries only the non-final tail and must follow the commit.
@@ -521,11 +611,14 @@ class SonioxStreaming {
       this.onPartialTranscript?.(this._clean(this.currentNonFinalText));
       // <fin> closes a finalize: every token for the audio sent before it has
       // already arrived as final, so the stop path can move on without a timer.
-      if (finalized) {
+      // A <fin> with nothing queued is taken as the stop's, as before. One that
+      // answers a command finalize is not the end of the recording.
+      if (finalized && this._finalizeQueue.shift() !== "command") {
         this._finalized = true;
         this._logVoiceCommandTrace();
         this.onFinalized?.();
       }
+      this._updateCommandTimer();
     } catch (err) {
       debugLogger.error("Soniox message parse error", { error: err.message });
     }
@@ -631,6 +724,8 @@ class SonioxStreaming {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
 
     this._finalizeSent = true;
+    this._clearCommandTimer();
+    this._finalizeQueue.push("stop");
     this.ws.send(JSON.stringify({ type: "finalize" }));
     debugLogger.debug("Soniox finalize sent");
     return true;
@@ -687,6 +782,7 @@ class SonioxStreaming {
     }
 
     this.isDisconnecting = true;
+    this._clearCommandTimer();
 
     if (closeStream && this.ws.readyState === WebSocket.OPEN && this.audioBytesSent > 0) {
       if (!this._finalizeSent) {
@@ -746,6 +842,7 @@ class SonioxStreaming {
 
   cleanup() {
     this.stopKeepAlive();
+    this._clearCommandTimer();
     clearTimeout(this.connectionTimeout);
     this.connectionTimeout = null;
     // So frames buffered for this session (mid-handshake) can never bleed
@@ -782,4 +879,7 @@ module.exports.buildHints = buildHints;
 module.exports.resolveRegion = resolveRegion;
 module.exports.isRecoverableErrorFrame = isRecoverableErrorFrame;
 module.exports.DEFAULT_MODEL = DEFAULT_MODEL;
+module.exports.VOICE_COMMAND_TERMS = VOICE_COMMAND_TERMS;
+module.exports.COMMAND_FINALIZE_QUIET_MS = COMMAND_FINALIZE_QUIET_MS;
+module.exports.COMMAND_FINALIZE_MIN_GAP_MS = COMMAND_FINALIZE_MIN_GAP_MS;
 module.exports.SONIOX_REGIONS = SONIOX_REGIONS;

@@ -9,6 +9,7 @@ const {
   ASYNC_MODEL,
   MAX_TERMS_CHARS,
 } = require("../../src/helpers/sonioxAsync");
+const { VOICE_COMMAND_TERMS } = require("../../src/helpers/sonioxStreaming");
 
 const FILE_ID = "11111111-1111-1111-1111-111111111111";
 const JOB_ID = "22222222-2222-2222-2222-222222222222";
@@ -146,7 +147,7 @@ describe("transcribeRecording", () => {
         });
         assert.equal(result.text, "one two four");
         const create = JSON.parse(requests[1].body.toString());
-        assert.deepEqual(create.context, { terms: ["CTRL"] });
+        assert.deepEqual(create.context, { terms: VOICE_COMMAND_TERMS });
       });
     });
 

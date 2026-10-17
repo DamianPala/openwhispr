@@ -1,10 +1,14 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const { WebSocketServer } = require("ws");
-const { applyVoiceCommands, COMMAND_PAUSE_MS } = require("../../src/helpers/voiceCommands");
+const {
+  applyVoiceCommands,
+  hasPendingCommand,
+  COMMAND_PAUSE_MS,
+} = require("../../src/helpers/voiceCommands");
 const SonioxStreaming = require("../../src/helpers/sonioxStreaming");
 
-const { buildConfigMessage, buildHints } = SonioxStreaming;
+const { buildConfigMessage, buildHints, VOICE_COMMAND_TERMS } = SonioxStreaming;
 
 const PIECE_MS = 80;
 const WORD_GAP_MS = 40;
@@ -79,6 +83,50 @@ describe("voice commands: deleting words", () => {
       "I said hello all right, next point."
     );
     assert.equal(run("Raz dwa", cmd("CTRL, usuń."), "Słowo daję"), "Raz słowo daję");
+  });
+
+  it("closes a bare verb by a pause before the next word", () => {
+    assert.equal(run("alpha beta", cmd("CTRL usuń"), cmd("gamma delta")), "alpha gamma delta");
+    // Under the pause the next word may still belong to the command: no command here.
+    const short = speak("alpha beta", cmd("CTRL usuń"), { text: "gamma delta", pause: 300 });
+    assert.equal(applyVoiceCommands(short), "alpha beta CTRL usuń gamma delta");
+    // Without timing a pause cannot close it.
+    const untimedTokens = untimed(speak("alpha beta", cmd("CTRL usuń"), cmd("gamma delta")));
+    assert.equal(applyVoiceCommands(untimedTokens), "alpha beta CTRL usuń gamma delta");
+  });
+
+  it("closes a bare verb that is the last word there is", () => {
+    assert.equal(run("alpha beta", cmd("CTRL usuń")), "alpha");
+    assert.equal(run("alpha beta", cmd("CTRL, delete")), "alpha");
+    // A verb that is not the last word, nor closed, still waits for its target.
+    const growing = speak("alpha beta", cmd("CTRL usuń"), "to");
+    assert.equal(applyVoiceCommands(growing), "alpha beta CTRL usuń to");
+    // After "control" a bare verb stays text.
+    const control = speak("press", cmd("Control usuń"));
+    assert.equal(applyVoiceCommands(control), control.map((t) => t.text).join(""));
+  });
+
+  it("keeps a closed verb bare when the target after it is not closed", () => {
+    assert.equal(
+      run("Pies szczeka.", cmd("CTRL, usuń"), cmd("Wszystko jest w porządku.")),
+      "Pies wszystko jest w porządku."
+    );
+    // The target is the last word of the text: not closed by that.
+    assert.equal(run("Ala ma kota", cmd("CTRL usuń."), "Wszystko"), "Ala ma wszystko");
+  });
+
+  it("takes the target of a closed verb when a pause or a full stop closes it", () => {
+    assert.equal(
+      run("Ala ma kota. Pies.", cmd("CTRL usuń."), cmd("Zdanie"), cmd("potem coś")),
+      "Ala ma kota. Potem coś"
+    );
+    assert.equal(run("Ala ma kota. Pies.", cmd("CTRL usuń."), cmd("Zdanie.")), "Ala ma kota.");
+  });
+
+  it("takes a last-word target after a verb closed by a pause, not by a full stop", () => {
+    assert.equal(run("Ala ma kota", cmd("CTRL usuń"), cmd("słowo")), "Ala ma");
+    assert.equal(run("Ala ma kota. Pies.", cmd("CTRL usuń"), cmd("zdanie")), "Ala ma kota.");
+    assert.equal(run("Ala ma kota", cmd("CTRL usuń."), cmd("słowo")), "Ala ma słowo");
   });
 
   it("keeps a bare verb after control or kontrol as text", () => {
@@ -338,7 +386,6 @@ describe("voice commands: recognising the prefix", () => {
       "CTRL, remove everything",
       "CTRL, delete 0 words",
       "CTRL, usuń to",
-      "CTRL, usuń",
       "CTRL,",
       "CTRL",
     ]) {
@@ -447,6 +494,71 @@ describe("voice commands: determinism", () => {
   });
 });
 
+describe("voice commands: hasPendingCommand", () => {
+  // The first `finalCount` tokens are final, the rest the non-final tail.
+  const live = (finalCount, ...parts) =>
+    speak(...parts).map((token, index) => ({ ...token, is_final: index < finalCount }));
+  const finalCountOf = (...parts) => speak(...parts).length;
+
+  it("is true when the non-final tail holds a command", () => {
+    const base = finalCountOf("alpha beta");
+    assert.equal(hasPendingCommand(live(base, "alpha beta", cmd("CTRL, usuń słowo."))), true);
+    assert.equal(hasPendingCommand(live(base, "alpha beta", cmd("CTRL, usuń słowo"))), true);
+    assert.equal(hasPendingCommand(live(base, "alpha beta", cmd("CTRL usuń zdanie."))), true);
+    assert.equal(hasPendingCommand(live(base, "alpha beta", cmd("CTRL cofnij."))), true);
+    // A bare verb that is the last word there is.
+    assert.equal(hasPendingCommand(live(base, "alpha beta", cmd("CTRL usuń"))), true);
+  });
+
+  it("is true when the prefix is final and the command words are not", () => {
+    const parts = ["alpha beta", cmd("CTRL, usuń słowo.")];
+    const upToPrefix = finalCountOf("alpha beta", cmd("CTRL,"));
+    assert.equal(hasPendingCommand(live(upToPrefix, ...parts)), true);
+  });
+
+  it("is false when the command is complete inside the final tokens", () => {
+    const parts = ["alpha beta", cmd("CTRL, usuń słowo.")];
+    assert.equal(hasPendingCommand(live(finalCountOf(...parts), ...parts)), false);
+    // Dictation after it, still non-final, does not make it pending again.
+    const withTail = [...parts, "gamma delta"];
+    assert.equal(hasPendingCommand(live(finalCountOf(...parts), ...withTail)), false);
+  });
+
+  it("is true for a second command after a finished one", () => {
+    const first = ["alpha beta gamma", cmd("CTRL usuń słowo.")];
+    const all = [...first, cmd("CTRL usuń słowo.")];
+    assert.equal(hasPendingCommand(live(finalCountOf(...first), ...all)), true);
+  });
+
+  it("is false for plain dictation and for a prefix that is not a command", () => {
+    const base = finalCountOf("alpha beta");
+    for (const tail of ["gamma delta.", cmd("CTRL"), cmd("CTRL, to będzie"), cmd("CTRL, ust")]) {
+      assert.equal(hasPendingCommand(live(base, "alpha beta", tail)), false, JSON.stringify(tail));
+    }
+    // The prefix follows the words without a pause, so it is text.
+    const quick = { text: "CTRL, usuń słowo.", pause: DEFAULT_PAUSE_MS };
+    assert.equal(hasPendingCommand(live(base, "alpha beta", quick)), false);
+  });
+
+  it("is false with nothing non-final, nothing at all, or no final flags to compare", () => {
+    const parts = ["alpha beta", cmd("CTRL usuń słowo.")];
+    assert.equal(hasPendingCommand(live(finalCountOf(...parts), ...parts)), false);
+    assert.equal(hasPendingCommand([]), false);
+    assert.equal(hasPendingCommand(undefined), false);
+    // Tokens that are all final, whatever they say, have nothing pending.
+    const allFinal = speak(...parts).map((token) => ({ ...token, is_final: true }));
+    assert.equal(hasPendingCommand(allFinal), false);
+  });
+
+  it("agrees with applyVoiceCommands: the same text decides, untouched input", () => {
+    const tokens = live(finalCountOf("one two three"), "one two three", cmd("CTRL usuń słowo."));
+    const snapshot = JSON.stringify(tokens);
+    assert.equal(hasPendingCommand(tokens), true);
+    assert.equal(applyVoiceCommands(tokens), "one two");
+    assert.equal(JSON.stringify(tokens), snapshot);
+  });
+});
+
 describe("SonioxStreaming with voice commands", () => {
   const frame = (tokens) =>
     JSON.stringify({ tokens: tokens.map((t) => ({ ...t, is_final: true })) });
@@ -531,20 +643,21 @@ describe("SonioxStreaming with voice commands", () => {
       const off = await connected(url, { keyterms: ["Soniox"] });
       await off.disconnect(false);
       await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.deepEqual(configs[0].context.terms, ["Soniox", "CTRL"]);
+      assert.deepEqual(configs[0].context.terms, ["Soniox", ...VOICE_COMMAND_TERMS]);
       assert.deepEqual(configs[1].context.terms, ["Soniox"]);
     });
   });
 
-  it("builds the CTRL term once, whatever the user's dictionary holds", () => {
-    assert.deepEqual(buildHints({ voiceCommands: true }).context, { terms: ["CTRL"] });
+  it("adds each command term once, whatever the user's dictionary holds", () => {
+    assert.ok(VOICE_COMMAND_TERMS.includes("CTRL usuń zdanie"));
+    assert.deepEqual(buildHints({ voiceCommands: true }).context, { terms: VOICE_COMMAND_TERMS });
     assert.deepEqual(buildHints({ voiceCommands: true, keyterms: ["ctrl", "x"] }).context, {
-      terms: ["ctrl", "x"],
+      terms: ["ctrl", "x", ...VOICE_COMMAND_TERMS.filter((term) => term !== "CTRL")],
     });
     assert.equal("context" in buildHints({}), false);
     assert.equal("context" in buildConfigMessage({ apiKey: "k" }), false);
     assert.deepEqual(buildConfigMessage({ apiKey: "k", voiceCommands: true }).context, {
-      terms: ["CTRL"],
+      terms: VOICE_COMMAND_TERMS,
     });
   });
 });

@@ -260,13 +260,12 @@ describe("buildConfigMessage", () => {
     assert.deepEqual(msg.context, { terms: ["Qdrant"] });
   });
 
-  it("turns on fast endpoint detection only with voice commands", () => {
-    const on = buildConfigMessage({ apiKey: "k", voiceCommands: true });
-    assert.equal(on.enable_endpoint_detection, true);
-    assert.equal(on.max_endpoint_delay_ms, 1500);
-    const off = buildConfigMessage({ apiKey: "k" });
-    assert.equal("enable_endpoint_detection" in off, false);
-    assert.equal("max_endpoint_delay_ms" in off, false);
+  it("never turns on endpoint detection, voice commands or not", () => {
+    for (const voiceCommands of [true, false, undefined]) {
+      const msg = buildConfigMessage({ apiKey: "k", voiceCommands });
+      assert.equal("enable_endpoint_detection" in msg, false);
+      assert.equal("max_endpoint_delay_ms" in msg, false);
+    }
   });
 
   it("omits context entirely when the dictionary is empty", () => {
@@ -1176,6 +1175,272 @@ describe("finalize", () => {
   it("returns false when there is no open socket", () => {
     const streaming = new SonioxStreaming();
     assert.equal(streaming.finalize(), false);
+  });
+});
+
+describe("finalize on a pending voice command (loopback)", () => {
+  const tok = (text, startMs, endMs, isFinal) => ({
+    text,
+    start_ms: startMs,
+    end_ms: endMs,
+    is_final: isFinal,
+  });
+  const frameOf = (tokens) => JSON.stringify({ tokens });
+  const FIN = { text: "<fin>", is_final: true };
+  const alpha = (isFinal) => [tok("alpha", 0, 200, isFinal), tok(" beta", 250, 400, isFinal)];
+  // "CTRL, usuń słowo." after a long pause; `at` moves it later in the recording.
+  const command = (isFinal, at = 1400) => [
+    tok(" CTRL", at, at + 200, isFinal),
+    tok(",", at + 200, at + 230, isFinal),
+    tok(" usuń", at + 300, at + 500, isFinal),
+    tok(" słowo", at + 550, at + 800, isFinal),
+    tok(".", at + 800, at + 830, isFinal),
+  ];
+  const isFinalizeFrame = (text) => {
+    try {
+      return JSON.parse(text).type === "finalize";
+    } catch {
+      return false; // raw audio, the end-of-audio marker
+    }
+  };
+  const finalizesSeen = (connection) => connection.messages.filter(isFinalizeFrame).length;
+
+  async function withSession(run, { voiceCommands = true, quietMs = 40, minGapMs = 60000 } = {}) {
+    await withSonioxServer(async (url, connections) => {
+      const streaming = new SonioxStreaming();
+      streaming.buildWebSocketUrl = () => url;
+      streaming.commandFinalizeQuietMs = quietMs;
+      streaming.commandFinalizeMinGapMs = minGapMs;
+      try {
+        await streaming.connect({ apiKey: "k", mode: "byok", voiceCommands });
+        await wait(20);
+        await run(streaming, connections[0], connections);
+      } finally {
+        streaming.cleanup();
+      }
+    });
+  }
+
+  it("sends no endpoint detection fields to the server with voice commands on", async () => {
+    await withSession(async (_streaming, connection) => {
+      const config = JSON.parse(connection.messages[0]);
+      assert.equal("enable_endpoint_detection" in config, false);
+      assert.equal("max_endpoint_delay_ms" in config, false);
+      assert.deepEqual(config.context.terms, SonioxStreaming.VOICE_COMMAND_TERMS);
+    });
+  });
+
+  it("finalizes once, after the quiet period, when the live tokens end in a command", async () => {
+    await withSession(async (streaming, connection) => {
+      streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+      await wait(10);
+      assert.equal(finalizesSeen(connection), 0, "not before the speaker has been quiet");
+      await wait(150);
+      assert.equal(finalizesSeen(connection), 1);
+      assert.deepEqual(streaming._finalizeQueue, ["command"]);
+      assert.equal(streaming._finalizeSent, false, "a command finalize is not the stop's");
+
+      streaming.handleMessage(frameOf(command(false)));
+      await wait(150);
+      assert.equal(finalizesSeen(connection), 1, "one in flight at a time");
+    });
+  });
+
+  it("does not finalize plain dictation or a prefix that is not a command", async () => {
+    await withSession(async (streaming, connection) => {
+      const cases = [
+        [tok(" gamma delta", 1400, 1900, false)],
+        [tok(" CTRL", 1400, 1600, false)],
+        [
+          tok(" CTRL", 1400, 1600, false),
+          tok(" to", 1650, 1700, false),
+          tok(" będzie", 1750, 1900, false),
+        ],
+        // No pause before the prefix, so it is text.
+        [
+          tok(" CTRL", 450, 600, false),
+          tok(" usuń", 650, 800, false),
+          tok(" słowo.", 850, 1000, false),
+        ],
+      ];
+      streaming.handleMessage(frameOf(alpha(true)));
+      for (const nonFinal of cases) {
+        streaming.handleMessage(frameOf(nonFinal));
+        assert.equal(streaming._commandTimer, null);
+        await wait(100);
+      }
+      assert.equal(finalizesSeen(connection), 0);
+    });
+  });
+
+  it("does nothing with voice commands off", async () => {
+    await withSession(
+      async (streaming, connection) => {
+        streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+        assert.equal(streaming._commandTimer, null);
+        await wait(100);
+        assert.equal(finalizesSeen(connection), 0);
+      },
+      { voiceCommands: false }
+    );
+  });
+
+  it("restarts the quiet period when the text changes, not otherwise", async () => {
+    await withSession(
+      async (streaming, connection) => {
+        streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+        await wait(180);
+        // Same text again: the running period is not restarted.
+        const timer = streaming._commandTimer;
+        streaming.handleMessage(frameOf(command(false)));
+        assert.equal(streaming._commandTimer, timer);
+        // Changed text (no closing full stop): a fresh period starts.
+        streaming.handleMessage(frameOf(command(false).slice(0, 4)));
+        assert.notEqual(streaming._commandTimer, timer);
+        await wait(180);
+        assert.equal(streaming._finalizeQueue.length, 0, "the first period would have ended");
+        await wait(300);
+        assert.equal(finalizesSeen(connection), 1);
+      },
+      { quietMs: 300 }
+    );
+  });
+
+  it("treats the <fin> of a command finalize as no end of recording", async () => {
+    const debugMock = mock.method(debugLogger, "debug", () => {});
+    try {
+      await withSession(async (streaming, connection) => {
+        let finalizedCalls = 0;
+        streaming.onFinalized = () => finalizedCalls++;
+        streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+        await wait(120);
+        assert.equal(finalizesSeen(connection), 1);
+
+        connection.socket.send(frameOf([...command(true), FIN]));
+        await wait(40);
+
+        assert.equal(finalizedCalls, 0);
+        assert.equal(streaming._finalized, false);
+        assert.deepEqual(streaming._finalizeQueue, []);
+        assert.equal(streaming.getFullTranscript(), "alpha");
+        const traced = () =>
+          debugMock.mock.calls.filter((call) => call.arguments[0] === "Soniox voice commands");
+        assert.equal(traced().length, 0, "the trace belongs to the end of the recording");
+
+        // The stop's own <fin> still runs the whole path.
+        streaming.sendAudio(Buffer.alloc(10));
+        const stopping = streaming.disconnect(true);
+        await wait(30);
+        connection.socket.send(frameOf([FIN]));
+        await stopping;
+        assert.equal(finalizedCalls, 1);
+        assert.equal(traced().length, 1);
+      });
+    } finally {
+      debugMock.mock.restore();
+    }
+  });
+
+  it("sends its own finalize on stop while a command finalize is in flight, and waits for its <fin>", async () => {
+    await withSession(async (streaming, connection) => {
+      let finalizedCalls = 0;
+      streaming.onFinalized = () => finalizedCalls++;
+      streaming.sendAudio(Buffer.alloc(10));
+      streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+      await wait(120);
+      assert.equal(finalizesSeen(connection), 1);
+
+      let stopped = false;
+      const stopping = streaming.disconnect(true).then((result) => {
+        stopped = true;
+        return result;
+      });
+      await wait(40);
+      assert.equal(finalizesSeen(connection), 2, "the stop did not reuse the command's finalize");
+      assert.deepEqual(streaming._finalizeQueue, ["command", "stop"]);
+
+      connection.socket.send(frameOf([...command(true), FIN]));
+      await wait(60);
+      assert.equal(stopped, false, "the command's <fin> does not release the stop");
+      assert.equal(finalizedCalls, 0);
+
+      connection.socket.send(frameOf([FIN]));
+      const result = await stopping;
+      assert.equal(finalizedCalls, 1);
+      assert.equal(result.text, "alpha");
+      await wait(30);
+      assert.equal(connection.messages.at(-1), "", "end-of-audio marker follows the stop's <fin>");
+    });
+  });
+
+  it("keeps the minimum gap between two command finalizes", async () => {
+    await withSession(
+      async (streaming, connection) => {
+        const stamps = [];
+        connection.socket.on("message", (data, isBinary) => {
+          if (!isBinary && isFinalizeFrame(data.toString())) stamps.push(Date.now());
+        });
+        streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+        await wait(100);
+        assert.equal(stamps.length, 1);
+
+        connection.socket.send(frameOf([...command(true), FIN]));
+        await wait(30);
+        streaming.handleMessage(frameOf(command(false, 4000)));
+        await wait(500);
+
+        assert.equal(stamps.length, 2);
+        assert.ok(stamps[1] - stamps[0] >= 230, `gap was ${stamps[1] - stamps[0]} ms`);
+      },
+      { quietMs: 20, minGapMs: 250 }
+    );
+  });
+
+  it("clears the timer on finalize, disconnect and cleanup", async () => {
+    await withSession(async (streaming, connection) => {
+      const pending = () => streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+
+      pending();
+      assert.notEqual(streaming._commandTimer, null);
+      streaming.cleanup();
+      assert.equal(streaming._commandTimer, null);
+      await wait(100);
+      assert.equal(finalizesSeen(connection), 0);
+    });
+
+    await withSession(
+      async (streaming, connection) => {
+        streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+        assert.notEqual(streaming._commandTimer, null);
+        await streaming.disconnect(false);
+        assert.equal(streaming._commandTimer, null);
+        await wait(120);
+        assert.equal(finalizesSeen(connection), 0);
+      },
+      { quietMs: 60 }
+    );
+
+    await withSession(async (streaming, connection) => {
+      streaming.handleMessage(frameOf([...alpha(true), ...command(false)]));
+      assert.equal(streaming.finalize(), true);
+      assert.equal(streaming._commandTimer, null);
+      await wait(120);
+      assert.equal(finalizesSeen(connection), 1, "only the stop's finalize");
+      assert.deepEqual(streaming._finalizeQueue, ["stop"]);
+    });
+  });
+
+  it("sends no command finalize once the stop's finalize is out", async () => {
+    await withSession(async (streaming, connection) => {
+      streaming.handleMessage(frameOf(alpha(true)));
+      assert.equal(streaming.finalize(), true);
+      // A command the recogniser still reports after the stop is not finalized on its own.
+      streaming.handleMessage(frameOf(command(false)));
+      assert.equal(streaming._commandTimer, null);
+      await wait(120);
+      assert.equal(finalizesSeen(connection), 1, "only the stop's finalize");
+      assert.deepEqual(streaming._finalizeQueue, ["stop"]);
+    });
   });
 });
 

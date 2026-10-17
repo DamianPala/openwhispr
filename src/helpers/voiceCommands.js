@@ -81,21 +81,27 @@ function toCount(word) {
   return NUMBER_WORDS.get(word) ?? null;
 }
 
-// Words after the prefix, each with the offset where it ends. Light punctuation
-// between them is ignored, so "CTRL, usuń słowo." and "CTRL usuń słowo" agree.
+// Words after the prefix, each with the offsets where it starts and ends and
+// where the next word starts (null when none follows, i.e. the text ends).
+// Light punctuation between them is ignored, so "CTRL, usuń słowo." and "CTRL
+// usuń słowo" agree.
 function lexWords(rest) {
-  const words = [];
+  const found = [];
   // \p{M} keeps a decomposed "ń" (n + combining accent) inside its word.
   // "+" because the recogniser writes the spoken prefix like a shortcut
   // ("Ctrl+usuń słowo").
   const re = /[\s,.:;!?…\-–—+/"'„”“«»()]*([\p{L}\p{M}\p{N}]+)/uy;
-  while (words.length < MAX_COMMAND_WORDS) {
+  // One word beyond the limit, so the last kept word still knows what follows it.
+  while (found.length <= MAX_COMMAND_WORDS) {
     const match = re.exec(rest);
     if (!match) break;
     const closed = /^\s*[.?!…]/u.test(rest.slice(re.lastIndex));
-    words.push({ word: fold(match[1]), end: re.lastIndex, closed });
+    const start = re.lastIndex - match[1].length;
+    found.push({ word: fold(match[1]), start, end: re.lastIndex, closed });
   }
-  return words;
+  return found
+    .slice(0, MAX_COMMAND_WORDS)
+    .map((entry, index) => ({ ...entry, nextStart: found[index + 1]?.start ?? null }));
 }
 
 function parseTarget(words, from) {
@@ -124,22 +130,37 @@ function parseCommand(entries, allowBare) {
   if (UNDO_WORDS.has(head)) return { type: "undo", used: i + 1 };
   if (head === "clear") return ALL_WORDS.has(words[i + 1]) ? { type: "all", used: i + 2 } : null;
   if (!DELETE_VERBS.has(head)) return null;
-  // A bare verb deletes one word only when the recogniser closed it with a
-  // sentence end ("CTRL, usuń."); an unknown word after it ("delete the file")
-  // keeps the whole phrase as text. After a closed verb, a target counts only
-  // when it is closed too ("CTRL usuń." + "Zdanie." split by an endpoint), or
-  // the first word of the next sentence ("Wszystko jest…") would be taken.
+  // A bare verb deletes one word only when it is closed: by a sentence end
+  // ("CTRL, usuń."), by a pause before the next word, or by being the last word
+  // there is. An unknown word after it ("delete the file") keeps the whole
+  // phrase as text. After a closed verb, a target counts only when it is closed
+  // by a sentence end or a pause, or the first word of the next sentence
+  // ("CTRL usuń. Wszystko jest…") would be taken. The end of the text closes a
+  // target too, unless the verb ended a sentence: a hesitation before the target
+  // ("CTRL usuń ‹pause› zdanie") right before the stop is still one command.
   const target = parseTarget(words, i + 1);
-  const verbClosed = entries[i].closed;
-  if (target && (!verbClosed || entries[target.used - 1].closed)) return target;
+  const verb = entries[i];
+  const verbClosed = verb.closed || verb.last;
+  const targetEnd = target && entries[target.used - 1];
+  const targetClosed = targetEnd && (targetEnd.closed || (targetEnd.last && !verb.sentenceEnd));
+  if (target && (!verbClosed || targetClosed)) return target;
   return verbClosed && allowBare ? { type: "words", count: 1, used: i + 1 } : null;
 }
 
 // The command that starts right after a prefix ending at `from`, and where its
 // text ends, punctuation the recogniser put behind it included.
-function detectCommand(text, from, allowBare) {
+// `timing` ({ list, starts }) lets a pause before the next word close a word
+// like a sentence end does; without timing only the text decides.
+function detectCommand(text, from, allowBare, timing) {
   const rest = text.slice(from);
   const words = lexWords(rest);
+  for (const entry of words) {
+    entry.last = entry.nextStart === null;
+    entry.sentenceEnd = entry.closed;
+    if (entry.closed || entry.last || !timing) continue;
+    const silence = silenceBefore(timing.list, timing.starts, text, from + entry.nextStart);
+    entry.closed = silence !== null && silence >= COMMAND_PAUSE_MS;
+  }
   const command = parseCommand(words, allowBare);
   if (!command) return null;
   const end = from + words[command.used - 1].end;
@@ -327,7 +348,10 @@ function applyVoiceCommands(tokens, { keyterms, skipFillers = false, trace } = {
     const prefixStart = match.index + match[1].length;
     if (prefixStart < cursor) continue;
     const allowBare = match[2].toLowerCase() === "ctrl";
-    const found = detectCommand(text, prefixStart + match[2].length, allowBare);
+    const found = detectCommand(text, prefixStart + match[2].length, allowBare, {
+      list,
+      starts,
+    });
     const paused = Boolean(found) && followsPause(list, starts, text, prefixStart);
     trace?.push({
       outcome: !found ? "no-command" : paused ? found.command.type : "no-pause",
@@ -348,4 +372,24 @@ function applyVoiceCommands(tokens, { keyterms, skipFillers = false, trace } = {
   return state.buffer;
 }
 
-module.exports = { applyVoiceCommands, COMMAND_PAUSE_MS };
+const countExecuted = (tokens, options) => {
+  const trace = [];
+  applyVoiceCommands(tokens, { ...options, trace });
+  return trace.filter(({ outcome }) => outcome !== "no-command" && outcome !== "no-pause").length;
+};
+
+/**
+ * Whether `tokens` (final first, then non-final, the way the stream delivers
+ * them; a token is final when `is_final === true`) hold a command that only the
+ * non-final tail completes. The grammar is applyVoiceCommands' own: the commands
+ * it would execute over all tokens are compared with those over the final ones,
+ * so a command already complete inside the final tokens is not pending.
+ */
+function hasPendingCommand(tokens, options = {}) {
+  const list = (tokens || []).filter((t) => t && typeof t.text === "string" && t.text);
+  const final = list.filter((t) => t.is_final === true);
+  if (final.length === list.length) return false;
+  return countExecuted(list, options) > countExecuted(final, options);
+}
+
+module.exports = { applyVoiceCommands, hasPendingCommand, COMMAND_PAUSE_MS };
