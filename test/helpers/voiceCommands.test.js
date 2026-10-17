@@ -69,6 +69,25 @@ describe("voice commands: deleting words", () => {
     assert.equal(run("Ala ma kota. Pies.", cmd("CTRL usuń."), cmd("Zdanie.")), "Ala ma kota.");
   });
 
+  it("does not take the next sentence's first word as the target of a closed verb", () => {
+    assert.equal(
+      run("Pies szczeka.", cmd("CTRL, usuń."), "Wszystko jest w porządku."),
+      "Pies wszystko jest w porządku."
+    );
+    assert.equal(
+      run("I said hello world", cmd("CTRL, delete."), "All right, next point."),
+      "I said hello all right, next point."
+    );
+    assert.equal(run("Raz dwa", cmd("CTRL, usuń."), "Słowo daję"), "Raz słowo daję");
+  });
+
+  it("keeps a bare verb after control or kontrol as text", () => {
+    for (const phrase of ["Control, delete.", "kontrol, usuń."]) {
+      const tokens = speak("press", cmd(phrase), "and so on");
+      assert.equal(applyVoiceCommands(tokens), tokens.map((t) => t.text).join(""), phrase);
+    }
+  });
+
   it("accepts the prefix the way the recogniser writes it", () => {
     for (const command of [
       "Ctrl+usuń słowo.",
@@ -186,6 +205,18 @@ describe("voice commands: undo", () => {
       run("Raz dwa. Trzy cztery.", cmd("CTRL usuń zdanie."), cmd("CTRL cofnij.")),
       "Raz dwa. Trzy cztery."
     );
+  });
+
+  it("keeps a space between restored text and text dictated after clearing", () => {
+    assert.equal(
+      run("Stary tekst.", cmd("CTRL clear all."), "Nowy tekst", cmd("CTRL cofnij.")),
+      "Stary tekst. Nowy tekst"
+    );
+  });
+
+  it("reads ten as a count, not a modifier", () => {
+    const base = "a b c d e f g h i j k l";
+    assert.equal(run(base, cmd("CTRL delete ten words.")), "a b");
   });
 
   it("undoes earlier commands with repeated undo", () => {

@@ -36,7 +36,6 @@ const MODIFIERS = new Set([
   "ostatni",
   "ostatnich",
   "to",
-  "ten",
   "last",
   "previous",
   "the",
@@ -113,8 +112,10 @@ function parseTarget(words, from) {
 }
 
 // `entries` come from lexWords(); the result says what to do and how many of
-// them the command used, or null when they are not a command.
-function parseCommand(entries) {
+// them the command used, or null when they are not a command. `allowBare` is
+// false after "control"/"kontrol", where "control. Delete." is also ordinary
+// speech about keys.
+function parseCommand(entries, allowBare) {
   const words = entries.map((entry) => entry.word);
   let i = 0;
   while (i < words.length && FILLER_RE.test(words[i])) i++;
@@ -125,18 +126,21 @@ function parseCommand(entries) {
   if (!DELETE_VERBS.has(head)) return null;
   // A bare verb deletes one word only when the recogniser closed it with a
   // sentence end ("CTRL, usuń."); an unknown word after it ("delete the file")
-  // keeps the whole phrase as text.
+  // keeps the whole phrase as text. After a closed verb, a target counts only
+  // when it is closed too ("CTRL usuń." + "Zdanie." split by an endpoint), or
+  // the first word of the next sentence ("Wszystko jest…") would be taken.
   const target = parseTarget(words, i + 1);
-  if (target) return target;
-  return entries[i].closed ? { type: "words", count: 1, used: i + 1 } : null;
+  const verbClosed = entries[i].closed;
+  if (target && (!verbClosed || entries[target.used - 1].closed)) return target;
+  return verbClosed && allowBare ? { type: "words", count: 1, used: i + 1 } : null;
 }
 
 // The command that starts right after a prefix ending at `from`, and where its
 // text ends, punctuation the recogniser put behind it included.
-function detectCommand(text, from) {
+function detectCommand(text, from, allowBare) {
   const rest = text.slice(from);
   const words = lexWords(rest);
-  const command = parseCommand(words);
+  const command = parseCommand(words, allowBare);
   if (!command) return null;
   const end = from + words[command.used - 1].end;
   const tail = /^[.,!?…;:]+/u.exec(text.slice(end));
@@ -224,8 +228,11 @@ function removeSentence(buffer) {
 function undo(state) {
   const entry = state.undo.pop();
   if (!entry || !state.buffer.startsWith(entry.after)) return;
-  // Text dictated since the command stays after the restored text.
-  state.buffer = entry.before + state.buffer.slice(entry.after.length);
+  // Text dictated since the command stays after the restored text; after a
+  // command that emptied the buffer it has no leading space of its own.
+  const rest = state.buffer.slice(entry.after.length);
+  const seam = rest && /^[\p{L}\p{N}]/u.test(rest) && !/\s$/u.test(entry.before) ? " " : "";
+  state.buffer = entry.before + seam + rest;
 }
 
 function execute(state, command) {
@@ -319,7 +326,8 @@ function applyVoiceCommands(tokens, { keyterms, skipFillers = false, trace } = {
   for (const match of text.matchAll(PREFIX_RE)) {
     const prefixStart = match.index + match[1].length;
     if (prefixStart < cursor) continue;
-    const found = detectCommand(text, prefixStart + match[2].length);
+    const allowBare = match[2].toLowerCase() === "ctrl";
+    const found = detectCommand(text, prefixStart + match[2].length, allowBare);
     const paused = Boolean(found) && followsPause(list, starts, text, prefixStart);
     trace?.push({
       outcome: !found ? "no-command" : paused ? found.command.type : "no-pause",

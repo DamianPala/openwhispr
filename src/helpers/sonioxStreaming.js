@@ -293,7 +293,9 @@ class SonioxStreaming {
   }
 
   // Outcome of every command prefix in the finished recording, so a command
-  // that did not fire live can be explained from the log. No transcript text.
+  // that did not fire live can be explained from the log. It holds the command
+  // words, and up to four words after a prefix that was not a command (the
+  // words the grammar could grow by), never the dictation after a command.
   _logVoiceCommandTrace() {
     if (!this.voiceCommandsEnabled) return;
     const trace = [];
