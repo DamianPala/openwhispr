@@ -119,6 +119,7 @@ class HotkeyManager extends EventEmitter {
     this.hyprlandRegistrationReady = Promise.resolve();
     this.kdeManager = null;
     this.useKDE = false;
+    this.kdeCancelFallbackLogged = false;
     // Injected by main.js: LinuxKeyManager or WindowsKeyManager checkAvailability.
     // Kept as a function so this module never requires the manager it asks about.
     this.nativeListenerProbe = null;
@@ -242,7 +243,7 @@ class HotkeyManager extends EventEmitter {
     if (
       hotkeys.length > 1 &&
       (((this.useGnome || this.useHyprland) && LINUX_NATIVE_TAP_SLOTS.has(slotName)) ||
-        (this.useKDE && slotName !== "cancel"))
+        (this.useKDE && !KDEShortcutManager.isGuardedSlot(slotName)))
     ) {
       debugLogger.log(
         `[HotkeyManager] Slot "${slotName}" has ${hotkeys.length} hotkeys but this Linux desktop backend only applies the primary ("${hotkey}")`
@@ -295,19 +296,54 @@ class HotkeyManager extends EventEmitter {
       return { success: true, hotkey };
     }
 
-    // On KDE (X11 or Wayland), route persistent slots through KGlobalAccel D-Bus.
-    // Temporary slots like "cancel" stay on globalShortcut to avoid stale
-    // KGlobalAccel registrations after crash (Escape would stop working system-wide).
-    if (this.useKDE && this.kdeManager && slotName !== "cancel") {
+    // On KDE (X11 or Wayland), route slots through KGlobalAccel D-Bus. Under
+    // XWayland a globalShortcut is only an X11 grab that eavesdrops, so the
+    // focused Wayland window still receives the key; KGlobalAccel consumes it.
+    // KGlobalAccel keeps a dead process's shortcuts active, so the temporary
+    // "cancel" slot (Escape) is registered only while kdeManager runs a guard
+    // process that unregisters it if the app dies. Without a guard, or when
+    // KGlobalAccel refuses, "cancel" falls back to globalShortcut below.
+    if (this.useKDE && this.kdeManager) {
       this.unregisterSlot(slotName);
 
-      const result = await this.kdeManager.registerKeybinding(
-        hotkey,
-        slotName,
-        callback,
-        slotName === "dictation" && this.activationMode === "push"
-      );
-      if (result !== true) {
+      // The registration takes several D-Bus round trips and the slot has no
+      // hotkeys until it is done. While a "cancel" registration is pending,
+      // unregisterSlot still forwards to the KDE manager (kdePending) and counts
+      // the request (unregisterRequests), so a stop that arrives in the middle wins.
+      const pendingSlot = this._ensureSlot(slotName);
+      pendingSlot.kdePending = (pendingSlot.kdePending || 0) + 1;
+      const requestsBefore = pendingSlot.unregisterRequests || 0;
+      let result;
+      try {
+        result = await this.kdeManager.registerKeybinding(
+          hotkey,
+          slotName,
+          callback,
+          slotName === "dictation" && this.activationMode === "push"
+        );
+      } finally {
+        pendingSlot.kdePending -= 1;
+      }
+      if (result === "superseded" || (pendingSlot.unregisterRequests || 0) !== requestsBefore) {
+        debugLogger.log(`[HotkeyManager] KDE slot "${slotName}" unregistered while registering`);
+        return {
+          success: false,
+          superseded: true,
+          error: i18nMain.t("hotkey.errors.registrationFailed", { hotkey }),
+        };
+      }
+      if (result === true) {
+        const slot = this._ensureSlot(slotName);
+        slot.hotkeys = [hotkey];
+        slot.callback = callback;
+        slot.accelerators = [];
+        slot.backend = "kde";
+        this.slots.set(slotName, slot);
+
+        debugLogger.log(`[HotkeyManager] KDE slot "${slotName}" set to "${hotkey}"`);
+        return { success: true, hotkey };
+      }
+      if (!KDEShortcutManager.isGuardedSlot(slotName)) {
         const reason =
           KDE_FAILURE_REASONS[result]?.(hotkey) ||
           i18nMain.t("hotkey.errors.registrationFailed", { hotkey });
@@ -317,15 +353,13 @@ class HotkeyManager extends EventEmitter {
         );
         return { success: false, error: reason };
       }
-
-      const slot = this._ensureSlot(slotName);
-      slot.hotkeys = [hotkey];
-      slot.callback = callback;
-      slot.accelerators = [];
-      this.slots.set(slotName, slot);
-
-      debugLogger.log(`[HotkeyManager] KDE slot "${slotName}" set to "${hotkey}"`);
-      return { success: true, hotkey };
+      if (!this.kdeCancelFallbackLogged) {
+        this.kdeCancelFallbackLogged = true;
+        debugLogger.log(
+          "[HotkeyManager] KDE cancel hotkey not registered via KGlobalAccel, using globalShortcut",
+          { reason: result }
+        );
+      }
     }
 
     if (LINUX_NATIVE_TAP_SLOTS.has(slotName) && this.useHyprland && this.hyprlandManager) {
@@ -360,6 +394,7 @@ class HotkeyManager extends EventEmitter {
     if (result.success) {
       const slot = this._ensureSlot(slotName);
       slot.callback = callback;
+      slot.backend = undefined;
       this.slots.set(slotName, slot);
     }
     return result;
@@ -367,10 +402,20 @@ class HotkeyManager extends EventEmitter {
 
   unregisterSlot(slotName) {
     const slot = this.slots.get(slotName);
-    if (!slot || !(slot.hotkeys?.length || slot.accelerators?.length)) return;
+    // Only a guarded slot's registration ("cancel") can be aborted midway (see
+    // registerSlot); other KDE slots keep their old unregister behaviour.
+    const kdePending = KDEShortcutManager.isGuardedSlot(slotName) && Boolean(slot?.kdePending);
+    if (!slot || !(slot.hotkeys?.length || slot.accelerators?.length || kdePending)) return;
 
-    // On KDE (X11 or Wayland), persistent slots are managed via KGlobalAccel
-    if (this.useKDE && this.kdeManager && slotName !== "cancel") {
+    // On KDE (X11 or Wayland), slots registered through KGlobalAccel are
+    // released there, also while that registration is still pending. "cancel"
+    // may sit on globalShortcut instead (fallback).
+    if (
+      this.useKDE &&
+      this.kdeManager &&
+      (!KDEShortcutManager.isGuardedSlot(slotName) || slot.backend === "kde" || kdePending)
+    ) {
+      if (kdePending) slot.unregisterRequests = (slot.unregisterRequests || 0) + 1;
       this.kdeManager.unregisterKeybinding(slotName).catch((err) => {
         debugLogger.warn(
           `[HotkeyManager] Error unregistering KDE keybinding for slot "${slotName}":`,
@@ -379,6 +424,7 @@ class HotkeyManager extends EventEmitter {
       });
       slot.hotkeys = [];
       slot.accelerators = [];
+      slot.backend = undefined;
       return;
     }
 
@@ -979,6 +1025,7 @@ class HotkeyManager extends EventEmitter {
       const ok = await this.kdeManager.init();
       if (ok) {
         await this.kdeManager.removeRetiredAgentKeybinding();
+        await this.kdeManager.removeStaleGuardedKeybindings();
         this.useKDE = true;
         this.hotkeyCallback = callback;
         debugLogger.log("[HotkeyManager] KDE shortcuts initialized via KGlobalAccel D-Bus");
