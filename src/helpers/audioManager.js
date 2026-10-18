@@ -73,6 +73,7 @@ import {
   getTranscriptionProviders,
   isOnlineParakeetModel,
   isSherpaLocalProvider,
+  resolveInferenceProvider,
 } from "../models/ModelRegistry";
 import { TINFOIL_PROXY_REQUIRED_ERROR } from "../services/transcriptionBaseUrl";
 import {
@@ -118,7 +119,16 @@ import {
 } from "./dictationAgentInference";
 import { providerSupportsImages } from "../services/ai/inferenceProviders";
 import { resolveDictationTranslationInference } from "./dictationTranslationInference";
-import { resolvePrompt, appendScreenContextSuffix } from "../config/prompts";
+import {
+  resolvePrompt,
+  appendScreenContextSuffix,
+  getConfiguredPromptText,
+} from "../config/prompts";
+import {
+  buildCleanupRecord,
+  cleanupProviderId,
+  EMPTY_CLEANUP_REPLY_MESSAGE,
+} from "./cleanupRecord";
 import { syncService } from "../services/SyncService.js";
 import { evaluateFinishedRecording, withSalvageWarning } from "./recordingValidation";
 import { isEmptyRecording } from "./recordingGuard";
@@ -723,6 +733,7 @@ class AudioManager {
     this.pendingSelectionEdit = null;
     this.pendingAssistantConversation = null;
     this.pendingCleanupFailure = null;
+    this.pendingCleanupRecord = null;
     this._processingCancellationGeneration = 0;
     this._activeProcessingPipeline = null;
     this.assistantSelectionContext = null;
@@ -967,6 +978,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this.pendingSelectionEdit = null;
     this.pendingAssistantConversation = null;
     this.pendingCleanupFailure = null;
+    this.pendingCleanupRecord = null;
     this.assistantSelectionContext = null;
     // No recording must ever see a stale capture (e.g. left over from a
     // cancelled voice-agent recording, even after the setting was turned
@@ -2804,11 +2816,70 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         : {}),
       ...(this.pendingSelectionEdit ? { selectionEdit: this.pendingSelectionEdit } : {}),
       ...(this.pendingCleanupFailure ? { cleanupFailure: this.pendingCleanupFailure } : {}),
+      ...(this.pendingCleanupRecord ? { cleanupRecord: this.pendingCleanupRecord } : {}),
     };
     this.pendingAssistantConversation = null;
     this.pendingSelectionEdit = null;
     this.pendingCleanupFailure = null;
+    this.pendingCleanupRecord = null;
     return extras;
+  }
+
+  // Provider and model of an ordinary cleanup call, as the call itself resolves
+  // them. `model` is what is sent; a cloud call leaves it to the server.
+  _cleanupCallTarget(settings, model) {
+    const cfg = selectResolvedLLMConfig(settings, "dictationCleanup");
+    return { provider: cleanupProviderId(cfg, resolveInferenceProvider), model };
+  }
+
+  // Runs one ordinary dictation-cleanup call and banks how it ended for the
+  // history row. It records and gets out of the way: the result or the error
+  // reaches the caller untouched, and a failure to record never fails the call.
+  // `cloud` marks the direct OpenWhispr cloud call, whose prompt and model live
+  // on the server (`result.model` names the model it used).
+  async _runRecordedCleanup(settings, run, { model = "", cloud = false, textOf = (r) => r } = {}) {
+    const startedAt = performance.now();
+    // A cancel clears the pending extras; a call that settles after it must not
+    // bank into the next dictation, which would carry this record.
+    const generation = this._streamingCancellationGeneration;
+    const bank = async (result, error) => {
+      try {
+        const target = cloud
+          ? { provider: "openwhispr", model: result?.model }
+          : this._cleanupCallTarget(settings, model);
+        const record = await buildCleanupRecord({
+          ...target,
+          promptText:
+            target.provider === "openwhispr"
+              ? null
+              : getConfiguredPromptText("cleanup", settings.uiLanguage),
+          ms: performance.now() - startedAt,
+          error,
+        });
+        if (generation === this._streamingCancellationGeneration) {
+          this.pendingCleanupRecord = record;
+        }
+      } catch (recordError) {
+        logger.warn(
+          "Could not record the cleanup outcome",
+          { error: recordError.message },
+          "audio"
+        );
+      }
+    };
+
+    let result;
+    try {
+      result = await run();
+    } catch (error) {
+      await bank(undefined, error);
+      throw error;
+    }
+    await bank(
+      result,
+      hasTextContent(textOf(result)) ? null : new Error(EMPTY_CLEANUP_REPLY_MESSAGE)
+    );
+    return result;
   }
 
   // Panel-first commands make no LLM call here — the panel resolves the Voice
@@ -3246,11 +3317,16 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
                 },
                 wasCancelled
               )
-            : await this.processWithReasoningModel(
-                normalizedText,
-                targetModel,
-                agentName,
-                reasoningConfig
+            : await this._runRecordedCleanup(
+                settings,
+                () =>
+                  this.processWithReasoningModel(
+                    normalizedText,
+                    targetModel,
+                    agentName,
+                    reasoningConfig
+                  ),
+                { model: targetModel }
               );
 
         logger.logReasoning("REASONING_SUCCESS", {
@@ -3542,47 +3618,62 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           if (hasTextContent(reasoned)) processedText = reasoned;
         } else if (route.kind === "cleanup" && cleanupCloudMode === "openwhispr") {
           const customPrompt = this.getCustomPrompt();
-          const reasonResult = await withSessionRefresh(async () => {
-            const res = await window.electronAPI.cloudReason(processedText, {
-              agentName,
-              promptMode: "cleanup",
-              purpose: "cleanup",
-              customDictionary: getDictionaryHintWords(settings),
-              customPrompt,
-              language: this.getCleanupLanguage(settings),
-              locale: settings.uiLanguage || "en",
-              streamingFallbackReason,
-              ...detectedLanguageFields,
-              sttProvider: result.sttProvider,
-              sttModel: result.sttModel,
-              sttProcessingMs: result.sttProcessingMs,
-              sttWordCount: result.sttWordCount,
-              sttLanguage: result.sttLanguage,
-              audioDurationMs: result.audioDurationMs,
-              audioSizeBytes,
-              audioFormat,
-            });
-            if (!res.success) {
-              const err = new Error(res.error || "Cloud reasoning failed");
-              err.code = res.code;
-              throw err;
-            }
-            return res;
-          });
+          const reasonResult = await this._runRecordedCleanup(
+            settings,
+            async () => {
+              const reasoned = await withSessionRefresh(async () => {
+                const res = await window.electronAPI.cloudReason(processedText, {
+                  agentName,
+                  promptMode: "cleanup",
+                  purpose: "cleanup",
+                  customDictionary: getDictionaryHintWords(settings),
+                  customPrompt,
+                  language: this.getCleanupLanguage(settings),
+                  locale: settings.uiLanguage || "en",
+                  streamingFallbackReason,
+                  ...detectedLanguageFields,
+                  sttProvider: result.sttProvider,
+                  sttModel: result.sttModel,
+                  sttProcessingMs: result.sttProcessingMs,
+                  sttWordCount: result.sttWordCount,
+                  sttLanguage: result.sttLanguage,
+                  audioDurationMs: result.audioDurationMs,
+                  audioSizeBytes,
+                  audioFormat,
+                });
+                if (!res.success) {
+                  const err = new Error(res.error || "Cloud reasoning failed");
+                  err.code = res.code;
+                  throw err;
+                }
+                return res;
+              });
+              // Inside the recorded call, so a rejected reply counts as a failed cleanup.
+              if (!customPrompt && hasTextContent(reasoned.text)) {
+                assertValidCleanupOutput(processedText, reasoned.text);
+              }
+              return reasoned;
+            },
+            { cloud: true, textOf: (res) => res.text }
+          );
 
           // Cloud cleanup can return success with empty text; keep the raw transcription instead of wiping it.
           if (reasonResult.success && hasTextContent(reasonResult.text)) {
-            if (!customPrompt) assertValidCleanupOutput(processedText, reasonResult.text);
             processedText = reasonResult.text;
           }
         } else if (route.kind === "cleanup") {
           const effectiveModel = getEffectiveCleanupModel();
           if (effectiveModel) {
-            const reasoned = await this.processWithReasoningModel(
-              processedText,
-              effectiveModel,
-              agentName,
-              route.config
+            const reasoned = await this._runRecordedCleanup(
+              settings,
+              () =>
+                this.processWithReasoningModel(
+                  processedText,
+                  effectiveModel,
+                  agentName,
+                  route.config
+                ),
+              { model: effectiveModel }
             );
             if (hasTextContent(reasoned)) processedText = reasoned;
           }
@@ -4285,7 +4376,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
   async saveTranscription(
     text,
     rawText = null,
-    { clientTranscriptionId, analyticsOccurredAt } = {}
+    { clientTranscriptionId, analyticsOccurredAt, cleanupRecord } = {}
   ) {
     const { dataRetentionEnabled, audioRetentionDays } = getEffectiveRetentionPreferences();
     if (!dataRetentionEnabled) {
@@ -4322,6 +4413,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         clientTranscriptionId: eventId,
         routeKind: this.translationRequested ? "translation" : null,
         analyticsOccurredAt: occurredAt.toISOString(),
+        ...(cleanupRecord ? { cleanupRecord } : {}),
       });
       if (result?.id) syncService.debouncedPush("transcription", result.id);
 
@@ -5356,6 +5448,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this.pendingSelectionEdit = null;
     this.pendingAssistantConversation = null;
     this.pendingCleanupFailure = null;
+    this.pendingCleanupRecord = null;
     this.assistantSelectionContext = null;
     this.screenContextPromise = null;
     this.selectionCapturePromise = null;
@@ -5783,36 +5876,47 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           );
         } else if (route.kind === "cleanup" && cleanupCloudMode === "openwhispr") {
           const customPrompt = this.getCustomPrompt();
-          const reasonResult = await withSessionRefresh(async () => {
-            const res = await window.electronAPI.cloudReason(finalText, {
-              agentName,
-              promptMode: "cleanup",
-              purpose: "cleanup",
-              customDictionary: getDictionaryHintWords(stSettings),
-              customPrompt,
-              language: this.getCleanupLanguage(stSettings),
-              locale: stSettings.uiLanguage || "en",
-              sttProvider: this.getStreamingProviderName(),
-              sttModel: streamingSttModel,
-              sttProcessingMs: streamingSttProcessingMs,
-              sttWordCount: streamingSttWordCount,
-              sttLanguage: streamingSttLanguage,
-              ...detectedLanguageFields,
-              audioDurationMs: durationSeconds ? Math.round(durationSeconds * 1000) : undefined,
-              audioSizeBytes: streamingAudioBytesSent || undefined,
-              audioFormat: "linear16",
-            });
-            if (!res.success) {
-              const err = new Error(res.error || "Cloud reasoning failed");
-              err.code = res.code;
-              throw err;
-            }
-            return res;
-          });
+          const reasonResult = await this._runRecordedCleanup(
+            stSettings,
+            async () => {
+              const reasoned = await withSessionRefresh(async () => {
+                const res = await window.electronAPI.cloudReason(finalText, {
+                  agentName,
+                  promptMode: "cleanup",
+                  purpose: "cleanup",
+                  customDictionary: getDictionaryHintWords(stSettings),
+                  customPrompt,
+                  language: this.getCleanupLanguage(stSettings),
+                  locale: stSettings.uiLanguage || "en",
+                  sttProvider: this.getStreamingProviderName(),
+                  sttModel: streamingSttModel,
+                  sttProcessingMs: streamingSttProcessingMs,
+                  sttWordCount: streamingSttWordCount,
+                  sttLanguage: streamingSttLanguage,
+                  ...detectedLanguageFields,
+                  audioDurationMs: durationSeconds ? Math.round(durationSeconds * 1000) : undefined,
+                  audioSizeBytes: streamingAudioBytesSent || undefined,
+                  audioFormat: "linear16",
+                });
+                if (!res.success) {
+                  const err = new Error(res.error || "Cloud reasoning failed");
+                  err.code = res.code;
+                  throw err;
+                }
+                return res;
+              });
+              // The server logged this call even if the reply is rejected below.
+              usedCloudReasoning = true;
+              // Inside the recorded call, so a rejected reply counts as a failed cleanup.
+              if (!customPrompt && hasTextContent(reasoned.text)) {
+                assertValidCleanupOutput(finalText, reasoned.text);
+              }
+              return reasoned;
+            },
+            { cloud: true, textOf: (res) => res.text }
+          );
 
-          usedCloudReasoning = true;
           if (reasonResult.success && hasTextContent(reasonResult.text)) {
-            if (!customPrompt) assertValidCleanupOutput(finalText, reasonResult.text);
             finalText = reasonResult.text;
           }
 
@@ -5827,11 +5931,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         } else if (route.kind === "cleanup") {
           const effectiveModel = getEffectiveCleanupModel();
           if (effectiveModel) {
-            const reasoned = await this.processWithReasoningModel(
-              finalText,
-              effectiveModel,
-              agentName,
-              route.config
+            const reasoned = await this._runRecordedCleanup(
+              stSettings,
+              () =>
+                this.processWithReasoningModel(finalText, effectiveModel, agentName, route.config),
+              { model: effectiveModel }
             );
             if (hasTextContent(reasoned)) finalText = reasoned;
             logger.info(

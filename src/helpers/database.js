@@ -33,6 +33,16 @@ const { app } = require("electron");
 // trigger can't 400 the whole sync batch.
 const MAX_SNIPPET_TRIGGER_LENGTH = 100;
 
+// transcriptions columns added by the cleanup-record migration, as "name TYPE".
+const CLEANUP_RECORD_COLUMNS = [
+  "cleanup_status TEXT",
+  "cleanup_provider TEXT",
+  "cleanup_model TEXT",
+  "cleanup_prompt_hash TEXT",
+  "cleanup_ms INTEGER",
+  "cleanup_error TEXT",
+];
+
 // Every local field a note create (POST) carries; the acknowledgement compares
 // these atomically against the pushed snapshot. Must mirror NotePushSnapshot
 // in src/types/electron.ts.
@@ -343,6 +353,15 @@ class DatabaseManager {
         this.db.exec("ALTER TABLE transcriptions ADD COLUMN route_kind TEXT");
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
+      }
+      // How the cleanup model call ended, so raw_text/text pairs can serve as
+      // evaluation cases. Local only: SyncService serialises explicit fields.
+      for (const column of CLEANUP_RECORD_COLUMNS) {
+        try {
+          this.db.exec(`ALTER TABLE transcriptions ADD COLUMN ${column}`);
+        } catch (err) {
+          if (!err.message.includes("duplicate column")) throw err;
+        }
       }
 
       this.db.exec(`
@@ -1513,12 +1532,14 @@ class DatabaseManager {
       routeKind = null,
       clientTranscriptionId = randomUUID(),
       analyticsOccurredAt = null,
+      cleanupRecord = null,
     } = {}
   ) {
     try {
       if (!this.db) {
         throw new Error("Database not initialized");
       }
+      const cleanup = cleanupRecord || {};
       // With an occurrence time this column carries when the dictation was
       // spoken rather than when the row was written -- earlier by the length
       // of the recording plus transcription. History reads it through
@@ -1530,8 +1551,10 @@ class DatabaseManager {
       const stmt = this.db.prepare(
         `INSERT INTO transcriptions (
            text, raw_text, status, error_message, error_code, route_kind,
-           client_transcription_id, timestamp
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))`
+           client_transcription_id, timestamp,
+           cleanup_status, cleanup_provider, cleanup_model, cleanup_prompt_hash,
+           cleanup_ms, cleanup_error
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?)`
       );
       const result = stmt.run(
         text,
@@ -1541,7 +1564,13 @@ class DatabaseManager {
         errorCode,
         routeKind,
         clientTranscriptionId,
-        occurredAt
+        occurredAt,
+        cleanup.status ?? null,
+        cleanup.provider ?? null,
+        cleanup.model ?? null,
+        cleanup.promptHash ?? null,
+        cleanup.ms ?? null,
+        cleanup.error ?? null
       );
 
       const fetchStmt = this.db.prepare("SELECT * FROM transcriptions WHERE id = ?");

@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const { loadAudioManager } = require("./harness/audioManager");
+
+const CLEANUP_PROMPT = "Prompt Studio cleanup prompt for {{agentName}}";
 
 test("cleanup failure details ride the raw result instead of notifying before paste", async (t) => {
   globalThis.__cleanupFallbackImmediateNotifications = [];
@@ -31,7 +34,10 @@ test("cleanup failure details ride the raw result instead of notifying before pa
         export const isCloudCleanupMode = () => false;
         export const isCloudDictationAgentMode = () => false;
         export const isCloudTranslationMode = () => false;
-        export const useSettingsStore = { subscribe: () => () => {} };
+        export const useSettingsStore = {
+          subscribe: () => () => {},
+          getState: () => ({ customPrompts: { cleanup: ${JSON.stringify(CLEANUP_PROMPT)} } }),
+        };
       `,
       "/dictationAgentInference": `
         export const resolveDictationAgentInference = () => ({
@@ -88,7 +94,9 @@ test("cleanup failure details ride the raw result instead of notifying before pa
 
   assert.equal(text, "original dictation");
   assert.deepEqual(globalThis.__cleanupFallbackImmediateNotifications, []);
-  assert.deepEqual(manager._takePendingResultExtras(), {
+  const extras = manager._takePendingResultExtras();
+  const { cleanupRecord, ...rest } = extras;
+  assert.deepEqual(rest, {
     cleanupFailure: {
       message: failure.message,
       messageKey: failure.messageKey,
@@ -98,6 +106,16 @@ test("cleanup failure details ride the raw result instead of notifying before pa
       technicalDetails,
     },
   });
+  // The record keeps the message only, not the classified fields the toast needs.
+  const { ms, ...record } = cleanupRecord;
+  assert.deepEqual(record, {
+    status: "error",
+    provider: "bedrock",
+    model: "anthropic.claude-haiku",
+    promptHash: createHash("sha256").update(CLEANUP_PROMPT, "utf8").digest("hex").slice(0, 12),
+    error: failure.message.slice(0, 300),
+  });
+  assert.ok(Number.isInteger(ms) && ms >= 0);
   assert.deepEqual(manager._takePendingResultExtras(), {});
 });
 

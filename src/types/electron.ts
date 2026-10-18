@@ -244,6 +244,19 @@ export interface ActiveAccountScope {
   authGeneration: number;
 }
 
+export type CleanupStatus = "ok" | "error";
+
+/** How the dictation cleanup call ended, saved with the history row. Local only. */
+export interface CleanupRecord {
+  status: CleanupStatus;
+  provider: string | null;
+  model: string | null;
+  /** First 12 hex chars of the SHA-256 of the configured prompt; null for server-side prompts. */
+  promptHash: string | null;
+  ms: number;
+  error: string | null;
+}
+
 export interface TranscriptionItem {
   id: number;
   text: string;
@@ -258,6 +271,12 @@ export interface TranscriptionItem {
   error_message: string | null;
   error_code: TranscriptionErrorCode;
   route_kind?: string | null;
+  cleanup_status?: CleanupStatus | null;
+  cleanup_provider?: string | null;
+  cleanup_model?: string | null;
+  cleanup_prompt_hash?: string | null;
+  cleanup_ms?: number | null;
+  cleanup_error?: string | null;
   client_transcription_id: string;
   cloud_id: string | null;
   sync_status: "synced" | "pending" | "error";
@@ -1446,8 +1465,10 @@ declare global {
           status?: TranscriptionStatus;
           errorMessage?: string | null;
           errorCode?: TranscriptionErrorCode;
+          routeKind?: string | null;
           clientTranscriptionId?: string;
           analyticsOccurredAt?: string;
+          cleanupRecord?: CleanupRecord;
         }
       ) => Promise<{ id: number; success: boolean; transcription?: TranscriptionItem }>;
       getTranscriptions: (

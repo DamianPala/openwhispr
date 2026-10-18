@@ -7,6 +7,7 @@ import {
 
 export {
   resolvePrompt,
+  getConfiguredPromptText,
   getDefaultPromptText,
   appendDictionarySuffix,
   appendScreenContextSuffix,

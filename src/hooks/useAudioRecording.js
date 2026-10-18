@@ -734,6 +734,7 @@ export const useAudioRecording = (toast, options = {}) => {
               ...(result.analyticsOccurredAt
                 ? { analyticsOccurredAt: result.analyticsOccurredAt }
                 : {}),
+              ...(result.cleanupRecord ? { cleanupRecord: result.cleanupRecord } : {}),
             })
             .then(
               (persisted) => {

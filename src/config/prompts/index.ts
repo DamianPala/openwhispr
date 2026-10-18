@@ -14,10 +14,14 @@ export interface ResolvePromptOptions {
   targetLanguageLabel?: string;
 }
 
-export function resolvePrompt(kind: PromptKind, opts: ResolvePromptOptions): string {
+// The template as the user configured it, before any substitution or suffix.
+export function getConfiguredPromptText(kind: PromptKind, uiLanguage?: string): string {
   const custom = useSettingsStore.getState().customPrompts[kind];
-  const template = custom || getDefaultPromptText(kind, opts.uiLanguage);
-  return applySubstitutions(template, opts);
+  return custom || getDefaultPromptText(kind, uiLanguage);
+}
+
+export function resolvePrompt(kind: PromptKind, opts: ResolvePromptOptions): string {
+  return applySubstitutions(getConfiguredPromptText(kind, opts.uiLanguage), opts);
 }
 
 export function getDefaultPromptText(kind: PromptKind, uiLanguage?: string): string {
