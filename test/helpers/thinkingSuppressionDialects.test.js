@@ -74,6 +74,18 @@ test("openrouter gets its native reasoning toggle and nothing else", async () =>
   assert.deepEqual(body, { reasoning: { enabled: false } });
 });
 
+test("openrouter sends a family with no off switch its lowest effort, not enabled false", async () => {
+  const { suppressThinking } = await load();
+
+  const gemini = {};
+  suppressThinking(gemini, "openrouter", "google/gemini-3.5-flash-lite");
+  assert.deepEqual(gemini, { reasoning: { effort: "minimal" } });
+
+  const gptOss = {};
+  suppressThinking(gptOss, "openrouter", "openai/gpt-oss-120b");
+  assert.deepEqual(gptOss, { reasoning: { effort: "low" } });
+});
+
 test("local gets think false plus chat_template_kwargs", async () => {
   const { suppressThinking } = await load();
 

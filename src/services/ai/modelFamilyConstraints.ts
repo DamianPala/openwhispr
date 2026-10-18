@@ -9,7 +9,7 @@
  * like thinkingSuppressionDialects.
  */
 export interface ModelFamilyConstraints {
-  family: "gpt-oss" | "qwen" | "magistral";
+  family: "gpt-oss" | "qwen" | "magistral" | "gemini-3.5-flash-lite";
   reasoningEffort?: {
     /** Value that best approximates "thinking off" for reasoning_effort. */
     suppressValue: string;
@@ -49,6 +49,13 @@ const FAMILIES: Array<ModelFamilyConstraints & { match: RegExp }> = [
     // sole consumer today — a canary run should confirm other hosts before
     // the generic dialect honors it.
     omitReasoningParams: true,
+  },
+  {
+    family: "gemini-3.5-flash-lite",
+    match: /gemini-3\.5-flash-lite/,
+    // Thinking cannot be turned off: through OpenRouter (google-vertex) "none"
+    // is a 400. "minimal" is the lowest level, confirmed in a 296-case eval.
+    reasoningEffort: { suppressValue: "minimal" },
   },
 ];
 

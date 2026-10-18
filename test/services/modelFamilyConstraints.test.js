@@ -23,3 +23,10 @@ test("gpt-oss has no reasoning off switch: suppress and cleanup both floor at lo
   const effort = getModelFamilyConstraints("gpt-oss-120b")?.reasoningEffort;
   assert.deepEqual(effort, { suppressValue: "low", cleanupValue: "low" });
 });
+
+test("gemini 3.5 flash lite cannot turn thinking off: suppress floors at minimal", async () => {
+  const { getModelFamilyConstraints } = await load();
+  const effort = getModelFamilyConstraints("google/gemini-3.5-flash-lite")?.reasoningEffort;
+  assert.deepEqual(effort, { suppressValue: "minimal" });
+  assert.equal(getModelFamilyConstraints("gemini-3.5-flash"), null);
+});

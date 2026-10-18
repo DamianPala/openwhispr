@@ -42,9 +42,11 @@ export function suppressThinking(
   }
 
   // OpenRouter forwards unknown params to upstream backends, which may reject
-  // them — use its native reasoning control instead.
+  // them — use its native reasoning control instead. A family with no off
+  // switch gets its lowest effort rather than an off request it cannot honour.
   if (providerKey === "openrouter") {
-    requestBody.reasoning = { enabled: false };
+    const effort = family?.reasoningEffort?.suppressValue;
+    requestBody.reasoning = effort && effort !== "none" ? { effort } : { enabled: false };
     return;
   }
 

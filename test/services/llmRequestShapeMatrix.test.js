@@ -60,6 +60,10 @@ const MATRIX = [
     { max_tokens: MAX_TOKENS, temperature: 0.3, reasoning_effort: "low" }],
   ["cerebras host: unknown family gets no guessed reasoning params", "custom", "llama-4-maverick", "https://api.cerebras.ai/v1", AGENT_NO_THINK,
     { max_tokens: MAX_TOKENS, temperature: 0.3 }],
+  ["openrouter as custom: gemini 3.5 flash lite gets the reasoning object at minimal, never none", "custom", "google/gemini-3.5-flash-lite", "https://eu.openrouter.ai/api/v1", CLEANUP_NO_THINK,
+    { max_completion_tokens: MAX_TOKENS, reasoning: { effort: "minimal" } }],
+  ["openrouter as custom: other models keep the generic reasoning_effort none", "custom", "openai/gpt-5.6-luna", "https://eu.openrouter.ai/api/v1", CLEANUP_NO_THINK,
+    { max_completion_tokens: MAX_TOKENS, reasoning_effort: "none", chat_template_kwargs: { enable_thinking: false } }],
 
   // --- Self-hosted ---
   ["lan disables Ollama thinking via the nested reasoning object (#1021)", "lan", "qwen3.5:9b", null, CLEANUP_NO_THINK,
