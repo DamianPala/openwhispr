@@ -21,7 +21,15 @@ export function getConfiguredPromptText(kind: PromptKind, uiLanguage?: string): 
 }
 
 export function resolvePrompt(kind: PromptKind, opts: ResolvePromptOptions): string {
-  return applySubstitutions(getConfiguredPromptText(kind, opts.uiLanguage), opts);
+  // A custom cleanup prompt owns its language rules. The appended "write your
+  // entire output in <language>" block contradicts a rule like "English stays
+  // English", and the model then translates some dictations and not others.
+  const ownsLanguage = kind === "cleanup" && !!useSettingsStore.getState().customPrompts.cleanup;
+  const language = ownsLanguage ? undefined : opts.language;
+  return applySubstitutions(getConfiguredPromptText(kind, opts.uiLanguage), {
+    ...opts,
+    language,
+  });
 }
 
 export function getDefaultPromptText(kind: PromptKind, uiLanguage?: string): string {
