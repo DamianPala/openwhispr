@@ -324,24 +324,23 @@ class KDEShortcutManager {
       // another component. Do not use globalShortcutsByKey here: its QKeySequence
       // argument is a struct, and a malformed one aborts KWin.
       try {
-        const dbusModule = getDBus();
-        const available = await new Promise((resolve, reject) => {
-          this.bus.invoke(
-            {
-              type: dbusModule.messageType.methodCall,
-              destination: "org.kde.kglobalaccel",
-              path: "/kglobalaccel",
-              interface: "org.kde.KGlobalAccel",
-              member: "isGlobalShortcutAvailable",
-              signature: "is",
-              body: [qtKey, COMPONENT_NAME],
-            },
-            (err, result) => {
-              if (err) return reject(err);
-              resolve(result);
-            }
-          );
-        });
+        let available = await this._isKeyAvailable(qtKey);
+        // The check also answers false for a key held by this component's own
+        // action, and KGlobalAccel keeps the action of a killed instance active.
+        // A slot this process has not registered yet can only be held by such
+        // a leftover, so clear it and ask once more. Guarded slots have their
+        // guard (and the startup cleanup) for that and touch nothing before it.
+        if (available === false && !guarded && !this.registeredSlots.has(slotName)) {
+          await this._unRegisterAction(actionId);
+          if (superseded()) return "superseded";
+          available = await this._isKeyAvailable(qtKey);
+          if (available !== false) {
+            debugLogger.log("[KDEShortcut] Cleared a leftover registration of this slot", {
+              slot: slotName,
+              hotkey: electronHotkey,
+            });
+          }
+        }
         if (available === false) {
           debugLogger.log("[KDEShortcut] Shortcut conflict — key owned by another component", {
             slot: slotName,
@@ -452,6 +451,27 @@ class KDEShortcutManager {
       debugLogger.log(`[KDEShortcut] Registration of "${slotName}" superseded, key released`);
     }
     return "superseded";
+  }
+
+  _isKeyAvailable(qtKey) {
+    const dbusModule = getDBus();
+    return new Promise((resolve, reject) => {
+      this.bus.invoke(
+        {
+          type: dbusModule.messageType.methodCall,
+          destination: "org.kde.kglobalaccel",
+          path: "/kglobalaccel",
+          interface: "org.kde.KGlobalAccel",
+          member: "isGlobalShortcutAvailable",
+          signature: "is",
+          body: [qtKey, COMPONENT_NAME],
+        },
+        (err, result) => {
+          if (err) return reject(err);
+          resolve(result);
+        }
+      );
+    });
   }
 
   async _unRegisterAction(actionId) {
