@@ -105,7 +105,7 @@ describe("transcribeRecording", () => {
 
       const create = JSON.parse(requests[1].body.toString());
       assert.deepEqual(create, {
-        model: "stt-async-v5",
+        model: "stt-async-v6",
         file_id: FILE_ID,
         language_hints: ["en", "pl"],
         context: { terms: ["Soniox", "OpenWhispr"] },

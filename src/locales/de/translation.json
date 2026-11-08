@@ -2767,7 +2767,7 @@
         "assemblyai_universal_streaming_english": "Unveränderliche Echtzeit-Transkripte, Englisch",
         "assemblyai_universal_streaming_multilingual": "Unveränderliche Echtzeit-Transkripte, mehrsprachig",
         "assemblyai_universal_3_5_pro": "Höchste Genauigkeit in Echtzeit, 18 Sprachen",
-        "soniox_stt_rt_v5": "Echtzeit-Streaming-Spracherkennung, über 60 Sprachen"
+        "soniox_stt_rt_v6": "Echtzeit-Streaming-Spracherkennung, über 60 Sprachen"
       },
       "cloud": {
         "openai_gpt_5_2": "Starkes Reasoning-Modell",

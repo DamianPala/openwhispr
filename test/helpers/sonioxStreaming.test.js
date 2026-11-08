@@ -315,8 +315,18 @@ describe("buildConfigMessage", () => {
     assert.equal(buildConfigMessage({ apiKey: "k", sampleRate: 8000 }).sample_rate, 8000);
   });
 
-  it("defaults the model to stt-rt-v5", () => {
+  it("defaults the model to stt-rt-v6", () => {
+    assert.equal(DEFAULT_MODEL, "stt-rt-v6");
     assert.equal(buildConfigMessage({ apiKey: "k" }).model, DEFAULT_MODEL);
+  });
+
+  it("moves a saved v5 or v4 selection to the default", () => {
+    assert.equal(buildConfigMessage({ model: "stt-rt-v5" }).model, DEFAULT_MODEL);
+    assert.equal(buildConfigMessage({ model: "stt-rt-v4" }).model, DEFAULT_MODEL);
+  });
+
+  it("keeps the API key out of the config frame", () => {
+    assert.equal("api_key" in buildConfigMessage({ apiKey: "secret" }), false);
   });
 
   // Guards against a stale model imported from another provider (or a retired
@@ -324,7 +334,10 @@ describe("buildConfigMessage", () => {
   it("falls back to DEFAULT_MODEL when the model isn't a Soniox realtime model", () => {
     assert.equal(buildConfigMessage({ apiKey: "k", model: "whisper-1" }).model, DEFAULT_MODEL);
     assert.equal(buildConfigMessage({ apiKey: "k", model: "" }).model, DEFAULT_MODEL);
-    assert.equal(buildConfigMessage({ apiKey: "k", model: "stt-rt-v4" }).model, "stt-rt-v4");
+    assert.equal(
+      buildConfigMessage({ apiKey: "k", model: "stt-rt-preview" }).model,
+      "stt-rt-preview"
+    );
   });
 
   it("dedupes language_hints when an extra resolves to the same base as the primary", () => {
@@ -439,8 +452,8 @@ async function withSonioxServer(run) {
   await new Promise((resolve) => server.once("listening", resolve));
   const url = `ws://127.0.0.1:${server.address().port}/transcribe-websocket`;
   const connections = [];
-  server.on("connection", (socket) => {
-    const entry = { socket, messages: [], closed: false };
+  server.on("connection", (socket, request) => {
+    const entry = { socket, headers: request.headers, messages: [], closed: false };
     socket.on("message", (data) => entry.messages.push(data.toString()));
     socket.on("close", () => {
       entry.closed = true;
@@ -464,7 +477,7 @@ describe("no warm socket between dictations", () => {
       streaming.buildWebSocketUrl = () => url;
       // A non-default model: currentModel starts at DEFAULT_MODEL, so only a
       // different id proves the session recorded what was sent.
-      const options = { apiKey: "k", mode: "byok", model: "stt-rt-v4" };
+      const options = { apiKey: "k", mode: "byok", model: "stt-rt-preview" };
       try {
         await streaming.connect(options);
         await streaming.disconnect(false);
@@ -474,9 +487,11 @@ describe("no warm socket between dictations", () => {
         assert.equal(connections.length, 2, "each dictation got its own socket");
         for (const connection of connections) {
           assert.equal(connection.messages.length, 1, "config only");
-          assert.equal(JSON.parse(connection.messages[0]).model, "stt-rt-v4");
+          assert.equal(JSON.parse(connection.messages[0]).model, "stt-rt-preview");
+          assert.equal(connection.headers.authorization, "Bearer k");
+          assert.equal("api_key" in JSON.parse(connection.messages[0]), false);
         }
-        assert.equal(streaming.currentModel, "stt-rt-v4");
+        assert.equal(streaming.currentModel, "stt-rt-preview");
       } finally {
         streaming.cleanup();
       }

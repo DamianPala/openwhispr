@@ -426,10 +426,10 @@
       "baseUrl": "https://api.soniox.com/v1",
       "models": [
         {
-          "id": "stt-rt-v5",
-          "name": "Soniox STT RT v5",
+          "id": "stt-rt-v6",
+          "name": "Soniox STT RT v6",
           "description": "Realtime streaming speech-to-text, 60+ languages",
-          "descriptionKey": "models.descriptions.transcription.soniox_stt_rt_v5",
+          "descriptionKey": "models.descriptions.transcription.soniox_stt_rt_v6",
           "streaming": true
         }
       ]

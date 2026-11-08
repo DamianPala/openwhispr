@@ -2767,7 +2767,7 @@
         "assemblyai_universal_streaming_english": "Immutable realtime transcripts, English",
         "assemblyai_universal_streaming_multilingual": "Immutable realtime transcripts, multilingual",
         "assemblyai_universal_3_5_pro": "Highest accuracy realtime, 18 languages",
-        "soniox_stt_rt_v5": "Realtime streaming speech-to-text, 60+ languages"
+        "soniox_stt_rt_v6": "Realtime streaming speech-to-text, 60+ languages"
       },
       "cloud": {
         "openai_gpt_5_2": "Strong reasoning model",

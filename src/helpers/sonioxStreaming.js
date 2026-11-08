@@ -18,7 +18,10 @@ const SONIOX_REGION_HOSTS = {
 };
 const SONIOX_REGIONS = Object.keys(SONIOX_REGION_HOSTS);
 const SONIOX_WS_PATH = "/transcribe-websocket";
-const DEFAULT_MODEL = "stt-rt-v5";
+const DEFAULT_MODEL = "stt-rt-v6";
+// Soniox removes v5 on 2026-12-15 (stt-rt-v4 is its alias). A selection saved
+// before v6 still names them, so they resolve to the default.
+const RETIRED_MODELS = new Set(["stt-rt-v4", "stt-rt-v5"]);
 const VOICE_COMMAND_TERMS = [
   "CTRL",
   "CTRL usuń",
@@ -44,7 +47,8 @@ const resolveRegion = (region) => (Object.hasOwn(SONIOX_REGION_HOSTS, region) ? 
 // A model that isn't a Soniox realtime model (e.g. a stale value imported from
 // another provider) falls back to the default rather than being sent as-is —
 // the same guard resolveByokModel applies in transcriptionRoute.ts.
-const resolveModel = (model) => (model && model.startsWith("stt-rt-") ? model : DEFAULT_MODEL);
+const resolveModel = (model) =>
+  model && model.startsWith("stt-rt-") && !RETIRED_MODELS.has(model) ? model : DEFAULT_MODEL;
 
 // What the recognizer is told about the speech, shared by the realtime config
 // and the async request so both transcribe the same dictation the same way.
@@ -76,8 +80,10 @@ function buildHints({ language, extraLanguages, keyterms, voiceCommands }) {
   return hints;
 }
 
+// The API key is not part of the config: it goes in the upgrade request's
+// Authorization header, since Soniox refuses a key sent only in the first frame
+// from 2027-01-15.
 function buildConfigMessage({
-  apiKey,
   model,
   language,
   extraLanguages,
@@ -86,7 +92,6 @@ function buildConfigMessage({
   voiceCommands,
 }) {
   return {
-    api_key: apiKey,
     model: resolveModel(model),
     audio_format: "pcm_s16le",
     sample_rate: sampleRate || 16000,
@@ -133,8 +138,8 @@ function hostOf(url) {
 
 // SONIOX_WS_URL is main-process-only config (environment.js's PERSISTED_KEYS),
 // but it still reaches a WebSocket constructor, so it gets the same treatment
-// as a user-supplied endpoint: wss: for any host (the api_key in the first
-// frame must not cross the network in the clear), ws: only for a host that
+// as a user-supplied endpoint: wss: for any host (the API key in the upgrade
+// request must not cross the network in the clear), ws: only for a host that
 // never leaves the machine or the LAN, and no embedded credentials (they would
 // otherwise land in a log line or a shell history that captured the .env write).
 function validateWsUrlOverride(value) {
@@ -511,7 +516,7 @@ class SonioxStreaming {
 
         let ws;
         try {
-          ws = new WebSocket(wsUrl);
+          ws = new WebSocket(wsUrl, { headers: { Authorization: `Bearer ${options.apiKey}` } });
         } catch (err) {
           this._settlePending(
             connectionFailure(`Soniox WebSocket failed to start: ${err.message}`, err)

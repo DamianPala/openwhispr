@@ -20,7 +20,7 @@ const SONIOX_API_HOSTS = {
   jp: "api.jp.soniox.com",
   in: "api.in.soniox.com",
 };
-const ASYNC_MODEL = "stt-async-v5";
+const ASYNC_MODEL = "stt-async-v6";
 const PROVIDER = "Soniox";
 const SURFACE = "transcription";
 

@@ -85,5 +85,5 @@ test("a model belonging to another provider degrades to the provider default", a
   assert.equal(resolveByokModel("gemini", "whisper-1"), "gemini-3.5-transcribe");
   assert.equal(resolveByokModel("deepgram", "whisper-1"), "nova-3");
   assert.equal(resolveByokModel("assemblyai", "nova-3"), "universal-3-5-pro");
-  assert.equal(resolveByokModel("soniox", "whisper-1"), "stt-rt-v5");
+  assert.equal(resolveByokModel("soniox", "whisper-1"), "stt-rt-v6");
 });

@@ -2668,7 +2668,7 @@
         "assemblyai_universal_streaming_english": "不会变动的实时转录（英语）",
         "assemblyai_universal_streaming_multilingual": "不会变动的实时转录（多语言）",
         "assemblyai_universal_3_5_pro": "最高精度实时转录，支持 18 种语言",
-        "soniox_stt_rt_v5": "实时流式语音转文字，支持 60 多种语言"
+        "soniox_stt_rt_v6": "实时流式语音转文字，支持 60 多种语言"
       },
       "cloud": {
         "openai_gpt_5_2": "强大的推理模型",
